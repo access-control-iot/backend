@@ -78,6 +78,7 @@ class Attendance(db.Model):
     entry_time = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     exit_time = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    estado_entrada = db.Column(db.String(50))
 
 class Huella(db.Model):
     __tablename__ = 'huella'
@@ -102,6 +103,7 @@ class UserSchedule(db.Model):
     schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'))
     start_date = db.Column(db.Date, nullable=False)
     end_date = db.Column(db.Date, nullable=True)
+    schedule = db.relationship("Schedule", backref="user_schedules")
 
 class ScheduleAudit(db.Model):
     id = db.Column(db.Integer, primary_key=True)

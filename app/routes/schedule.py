@@ -114,6 +114,7 @@ def create_schedule():
 @admin_required
 def assign_schedule():
     data = request.get_json() or {}
+
     try:
         user_id = int(data.get('user_id'))
         schedule_id = int(data.get('schedule_id'))
@@ -121,24 +122,58 @@ def assign_schedule():
         end_date = parse_date_str(data.get('end_date')) if data.get('end_date') else None
     except (TypeError, ValueError) as e:
         return jsonify(msg='Parámetros inválidos', detail=str(e)), 400
+
     user = User_iot.query.get(user_id)
     if not user:
         return jsonify(msg='Usuario no existe'), 404
+
     schedule = Schedule.query.get(schedule_id)
     if not schedule:
         return jsonify(msg='Schedule no existe'), 404
-    overlap = UserSchedule.query.filter(
+
+    # -------------------------------------------
+    # BUSCAR HORARIOS EXISTENTES EN EL RANGO
+    # -------------------------------------------
+    existing_schedules = UserSchedule.query.filter(
         UserSchedule.user_id == user_id,
         UserSchedule.start_date <= (end_date or date.max),
         or_(
             UserSchedule.end_date == None,
             UserSchedule.end_date >= start_date
         )
-).first()
+    ).all()
 
-    if overlap:
-        return jsonify(msg="El usuario ya tiene un horario asignado en ese rango"), 400
-    
+    # -------------------------------------------
+    # FUNCIÓN PARA DETECTAR CHOQUE REAL
+    # -------------------------------------------
+    def horarios_chocan(h1, h2):
+        dias1 = set(h1.dias.split(","))
+        dias2 = set(h2.dias.split(","))
+
+        # 1. Si no comparten días → no chocan
+        if dias1.isdisjoint(dias2):
+            return False
+
+        # Convertir horas a objeto time si son strings
+        e1 = h1.hora_entrada if not isinstance(h1.hora_entrada, str) else datetime.strptime(h1.hora_entrada, "%H:%M").time()
+        s1 = h1.hora_salida  if not isinstance(h1.hora_salida, str)  else datetime.strptime(h1.hora_salida, "%H:%M").time()
+
+        e2 = h2.hora_entrada if not isinstance(h2.hora_entrada, str) else datetime.strptime(h2.hora_entrada, "%H:%M").time()
+        s2 = h2.hora_salida  if not isinstance(h2.hora_salida, str)  else datetime.strptime(h2.hora_salida, "%H:%M").time()
+
+        # 2. Verificar cruce horario real
+        return not (s1 <= e2 or s2 <= e1)
+
+    # -------------------------------------------
+    # VALIDAR CHOQUES ENTRE EL NUEVO Y LOS EXISTENTES
+    # -------------------------------------------
+    for us in existing_schedules:
+        if horarios_chocan(schedule, us.schedule):
+            return jsonify(msg="El usuario ya tiene un horario asignado que se cruza en días y horas"), 400
+
+    # -------------------------------------------
+    # SI NO HAY CHOQUES, SE ASIGNA NORMALMENTE
+    # -------------------------------------------
     us = UserSchedule(
         user_id=user_id,
         schedule_id=schedule_id,

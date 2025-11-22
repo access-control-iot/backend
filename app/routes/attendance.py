@@ -2,7 +2,8 @@
 from flask import Blueprint, request, jsonify, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
-from sqlalchemy import func
+import pytz
+from sqlalchemy import func, or_
 from io import StringIO
 import csv
 
@@ -93,34 +94,100 @@ def log_attendance():
     if not huella_id:
         return jsonify({"msg": "huella_id es requerido"}), 400
 
-
     user = User_iot.query.filter_by(huella_id=huella_id).first()
     if not user:
         return jsonify({"msg": "Usuario con esa huella no encontrado"}), 404
 
-    now = datetime.utcnow()
+    lima_tz = pytz.timezone("America/Lima")
+    now = datetime.now(lima_tz)
+    today = now.date()
 
+    user_schedule = UserSchedule.query.filter(
+        UserSchedule.user_id == user.id,
+        UserSchedule.start_date <= today,
+        or_(UserSchedule.end_date.is_(None), UserSchedule.end_date >= today)
+    ).first()
+
+    if not user_schedule:
+        return jsonify({"msg": "Usuario no tiene horario asignado hoy"}), 400
+
+    schedule = user_schedule.schedule
+    weekday_map = {
+        0: "Lun", 1: "Mar", 2: "Mie", 3: "Jue",
+        4: "Vie", 5: "Sab", 6: "Dom"
+    }
+    today_label = weekday_map[now.weekday()]
+    dias_validos = schedule.dias.split(",")
+
+    if today_label not in dias_validos:
+        return jsonify({"msg": "El usuario no debe trabajar hoy"}), 400
+
+    if isinstance(schedule.hora_entrada, str):
+        hora_entrada_obj = datetime.strptime(schedule.hora_entrada, "%H:%M").time()
+    else:
+        hora_entrada_obj = schedule.hora_entrada
+
+    if isinstance(schedule.hora_salida, str):
+        hora_salida_obj = datetime.strptime(schedule.hora_salida, "%H:%M").time()
+    else:
+        hora_salida_obj = schedule.hora_salida
+
+    hora_entrada = lima_tz.localize(datetime.combine(today, hora_entrada_obj))
+    hora_salida = lima_tz.localize(datetime.combine(today, hora_salida_obj))
+
+    tolerancia = schedule.tolerancia_entrada
+    limite_tolerancia = hora_entrada + timedelta(minutes=tolerancia)
 
     open_att = Attendance.query.filter_by(
         user_id=user.id,
         exit_time=None
     ).order_by(Attendance.entry_time.desc()).first()
 
- 
+
     if not open_att:
+
+        if now < hora_entrada:
+            estado = "Asistio_anticipado"
+
+        elif now > hora_salida:
+            estado = "Falta"
+
+            new_att = Attendance(
+                user_id=user.id,
+                entry_time=now,
+                estado_entrada=estado,
+                exit_time=now  
+            )
+            db.session.add(new_att)
+            db.session.commit()
+
+            return jsonify({
+                "msg": "Falta registrada (no se abrió asistencia)",
+                "estado": estado,
+                "user": user.username,
+                "time": new_att.entry_time.isoformat()
+            }), 201
+
+        elif hora_entrada <= now <= limite_tolerancia:
+            estado = "dentro_tolerancia"
+
+        elif limite_tolerancia < now <= hora_salida:
+            estado = "tardanza"
+
         new_att = Attendance(
             user_id=user.id,
-            entry_time=now
+            entry_time=now,
+            estado_entrada=estado
         )
         db.session.add(new_att)
         db.session.commit()
 
         return jsonify({
             "msg": "Entrada registrada",
+            "estado": estado,
             "user": user.username,
             "entry_time": new_att.entry_time.isoformat()
         }), 201
-
 
     open_att.exit_time = now
     db.session.commit()
@@ -131,6 +198,7 @@ def log_attendance():
         "entry_time": open_att.entry_time.isoformat(),
         "exit_time": open_att.exit_time.isoformat()
     }), 200
+
 
 @bp.route('/attendance/history', methods=['GET'])
 @jwt_required()
