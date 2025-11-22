@@ -130,10 +130,7 @@ def assign_schedule():
     schedule = Schedule.query.get(schedule_id)
     if not schedule:
         return jsonify(msg='Schedule no existe'), 404
-
-    # -------------------------------------------
-    # BUSCAR HORARIOS EXISTENTES EN EL RANGO
-    # -------------------------------------------
+    
     existing_schedules = UserSchedule.query.filter(
         UserSchedule.user_id == user_id,
         UserSchedule.start_date <= (end_date or date.max),
@@ -143,37 +140,25 @@ def assign_schedule():
         )
     ).all()
 
-    # -------------------------------------------
-    # FUNCIÓN PARA DETECTAR CHOQUE REAL
-    # -------------------------------------------
     def horarios_chocan(h1, h2):
         dias1 = set(h1.dias.split(","))
         dias2 = set(h2.dias.split(","))
 
-        # 1. Si no comparten días → no chocan
+        
         if dias1.isdisjoint(dias2):
             return False
 
-        # Convertir horas a objeto time si son strings
         e1 = h1.hora_entrada if not isinstance(h1.hora_entrada, str) else datetime.strptime(h1.hora_entrada, "%H:%M").time()
         s1 = h1.hora_salida  if not isinstance(h1.hora_salida, str)  else datetime.strptime(h1.hora_salida, "%H:%M").time()
 
         e2 = h2.hora_entrada if not isinstance(h2.hora_entrada, str) else datetime.strptime(h2.hora_entrada, "%H:%M").time()
         s2 = h2.hora_salida  if not isinstance(h2.hora_salida, str)  else datetime.strptime(h2.hora_salida, "%H:%M").time()
 
-        # 2. Verificar cruce horario real
         return not (s1 <= e2 or s2 <= e1)
-
-    # -------------------------------------------
-    # VALIDAR CHOQUES ENTRE EL NUEVO Y LOS EXISTENTES
-    # -------------------------------------------
     for us in existing_schedules:
         if horarios_chocan(schedule, us.schedule):
             return jsonify(msg="El usuario ya tiene un horario asignado que se cruza en días y horas"), 400
 
-    # -------------------------------------------
-    # SI NO HAY CHOQUES, SE ASIGNA NORMALMENTE
-    # -------------------------------------------
     us = UserSchedule(
         user_id=user_id,
         schedule_id=schedule_id,
