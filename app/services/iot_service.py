@@ -59,32 +59,28 @@ class IoTService:
         now = datetime.utcnow()
         today = now.date()
 
-    
-        last_attendance = Attendance.query.filter_by(user_id=user_id) \
-                            .order_by(Attendance.entry_time.desc()).first()
+        last_att = Attendance.query.filter_by(user_id=user_id) \
+                        .order_by(Attendance.entry_time.desc()).first()
+
+
+        if not last_att:
+            db.session.add(Attendance(user_id=user_id, entry_time=now))
+            db.session.commit()
+            return
 
         
-        if not last_attendance:
-            new_att = Attendance(user_id=user_id, entry_time=now)
-            db.session.add(new_att)
-            db.session.commit()
-            return
-
-    
-        if last_attendance.entry_time.date() != today:
-            new_att = Attendance(user_id=user_id, entry_time=now)
-            db.session.add(new_att)
+        if last_att.entry_time.date() != today:
+            db.session.add(Attendance(user_id=user_id, entry_time=now))
             db.session.commit()
             return
 
 
-        if last_attendance.entry_time.date() == today and not last_attendance.exit_time:
-            last_attendance.exit_time = now
+        if not last_att.exit_time:
+            last_att.exit_time = now
             db.session.commit()
             return
 
-    
-        new_att = Attendance(user_id=user_id, entry_time=now)
-        db.session.add(new_att)
+
+        db.session.add(Attendance(user_id=user_id, entry_time=now))
         db.session.commit()
 
