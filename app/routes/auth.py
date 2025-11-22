@@ -45,7 +45,19 @@ def login():
             }
         )
 
-        return jsonify(access_token=access_token), 200
+        user_data = {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": role_name,
+            "nombre": user.nombre, 
+            "apellido": user.apellido,  
+        }
+
+        return jsonify(
+            access_token=access_token,
+            user=user_data
+        ), 200
 
     return jsonify({"msg": "Bad username or password"}), 401
 
