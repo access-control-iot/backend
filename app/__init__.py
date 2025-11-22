@@ -16,13 +16,20 @@ def create_app():
     jwt.init_app(app)
     migrate.init_app(app, db)
 
-    from app.routes import auth_bp, access_bp, attendance_bp, user_bp, schedule_bp
+    # IMPORTAR BLUEPRINTS
+    from app.routes.auth import bp as auth_bp
+    from app.routes.access import bp as access_bp
+    from app.routes.attendance import bp as attendance_bp
+    from app.routes.user import user_bp
+    from app.routes.schedule import schedule_bp   
+
+    # REGISTRAR BLUEPRINTS
     app.register_blueprint(auth_bp)
     app.register_blueprint(access_bp)
     app.register_blueprint(attendance_bp)
     app.register_blueprint(user_bp)
     app.register_blueprint(schedule_bp)
-    
+
     print("\n=== ROUTES LOADED ===")
     for rule in app.url_map.iter_rules():
         print(rule)

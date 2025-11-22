@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 import base64
 
-from ..models import User_iot, Role
+from ..models import User_iot, Role, Huella
 
 from app import db
 
@@ -165,3 +165,25 @@ def assign_rfid(user_id):
     db.session.commit()
 
     return jsonify(msg="RFID asignado correctamente"), 200
+
+@user_bp.route("/huella/register", methods=["POST"])
+def register_huella():
+    data = request.get_json() or {}
+
+    if "huella_id" not in data:
+        return jsonify(msg="Se requiere huella_id"), 400
+
+    try:
+        hid = int(data["huella_id"])
+    except:
+        return jsonify(msg="huella_id debe ser entero"), 400
+
+
+    if Huella.query.get(hid):
+        return jsonify(msg="Esta huella ya está registrada"), 400
+
+    nueva = Huella(id=hid)
+    db.session.add(nueva)
+    db.session.commit()
+
+    return jsonify(msg="Huella registrada correctamente", huella_id=hid), 201

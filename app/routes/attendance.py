@@ -86,29 +86,51 @@ def register_attendance_from_access(access_log: AccessLog):
         return {'ok': True, 'action': 'entry', 'attendance_id': att.id, 'schedule': schedule_info}
 
 @bp.route('/attendance/log', methods=['POST'])
-@jwt_required()
 def log_attendance():
-    identity = get_jwt_identity()
-    user = _get_user_from_identity(identity)
-    if not user:
-        return jsonify({'msg': 'Usuario no autenticado'}), 401
-
     data = request.get_json() or {}
-    action = data.get('action', 'entry')  
+
+    huella_id = data.get("huella_id")
+    if not huella_id:
+        return jsonify({"msg": "huella_id es requerido"}), 400
+
+
+    user = User_iot.query.filter_by(huella_id=huella_id).first()
+    if not user:
+        return jsonify({"msg": "Usuario con esa huella no encontrado"}), 404
+
     now = datetime.utcnow()
 
-    if action == 'entry':
-        att = Attendance(user_id=user.id, entry_time=now)
-        db.session.add(att)
+
+    open_att = Attendance.query.filter_by(
+        user_id=user.id,
+        exit_time=None
+    ).order_by(Attendance.entry_time.desc()).first()
+
+ 
+    if not open_att:
+        new_att = Attendance(
+            user_id=user.id,
+            entry_time=now
+        )
+        db.session.add(new_att)
         db.session.commit()
-        return jsonify({'message': 'Entry logged', 'attendance': _serialize_attendance(att)}), 201
-    else:
-        open_att = Attendance.query.filter_by(user_id=user.id, exit_time=None).order_by(Attendance.entry_time.desc()).first()
-        if not open_att:
-            return jsonify({'message': 'No open entry found'}), 404
-        open_att.exit_time = now
-        db.session.commit()
-        return jsonify({'message': 'Exit logged', 'attendance': _serialize_attendance(open_att)}), 200
+
+        return jsonify({
+            "msg": "Entrada registrada",
+            "user": user.username,
+            "entry_time": new_att.entry_time.isoformat()
+        }), 201
+
+
+    open_att.exit_time = now
+    db.session.commit()
+
+    return jsonify({
+        "msg": "Salida registrada",
+        "user": user.username,
+        "entry_time": open_att.entry_time.isoformat(),
+        "exit_time": open_att.exit_time.isoformat()
+    }), 200
 
 @bp.route('/attendance/history', methods=['GET'])
 @jwt_required()

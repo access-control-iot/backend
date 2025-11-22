@@ -18,10 +18,7 @@ def _get_current_user_from_jwt():
         user_id = identity
     return User_iot.query.get(user_id) if user_id else None
 
-def compare_biometric(stored_bytes, incoming_bytes) -> bool:
-    if not stored_bytes or not incoming_bytes:
-        return False
-    return stored_bytes == incoming_bytes
+
 
 @bp.route('/assign-rfid', methods=['POST'])
 @jwt_required()
@@ -99,19 +96,17 @@ def fingerprint_access():
     data = request.get_json() or {}
     huella_id = data.get('huella_id')
 
-    
+
     if huella_id is None:
         return jsonify(status='Denegado', reason='Falta huella_id'), 400
 
-    
+
     user = User_iot.query.filter_by(huella_id=huella_id).first()
 
     now = datetime.utcnow()
-
     status = 'Permitido' if user else 'Denegado'
     reason = None if user else 'Huella no válida'
 
-   
     log = AccessLog(
         user_id=user.id if user else None,
         timestamp=now,
@@ -131,19 +126,22 @@ def fingerprint_access():
         except Exception:
             attendance_info = None
 
-
     if user:
         resp = {
             'status': 'Permitido',
             'user_id': user.id,
         }
+
         if attendance_info:
             resp['attendance_action'] = attendance_info.get('action')
             resp['attendance_id'] = attendance_info.get('attendance_id')
+
             if 'schedule' in attendance_info:
                 resp['estado_horario'] = attendance_info['schedule'].get('state')
                 resp['minutes_diff'] = attendance_info['schedule'].get('minutes_diff')
+
         return jsonify(resp), 200
+
     else:
         return jsonify(status='Denegado', reason='Huella no válida'), 403
 
@@ -233,3 +231,5 @@ def check_schedule_status(schedule, dt):
         return 'fuera_de_horario'
     else:
         return 'presente'
+
+

@@ -80,9 +80,10 @@ class Attendance(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Huella(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    data = db.Column(db.LargeBinary, nullable=False)
+    __tablename__ = 'huella'
+    id = db.Column(db.Integer, primary_key=True)  
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 
 
 class Schedule(db.Model):
@@ -92,8 +93,8 @@ class Schedule(db.Model):
     tolerancia_entrada = db.Column(db.Integer, default=0) 
     hora_salida = db.Column(db.Time, nullable=False)
     tolerancia_salida = db.Column(db.Integer, default=0)   
-    dias = db.Column(db.String(50), nullable=False)        # p.ej. 'Lun,Mar,Mié'
-    tipo = db.Column(db.String(20), nullable=False)      # 
+    dias = db.Column(db.String(50), nullable=False)        
+    tipo = db.Column(db.String(20), nullable=False)       
 
 class UserSchedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
