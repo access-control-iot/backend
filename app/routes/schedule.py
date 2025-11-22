@@ -4,6 +4,8 @@ from flask_jwt_extended import get_jwt, jwt_required, get_jwt_identity
 from datetime import date, datetime
 from functools import wraps
 
+from sqlalchemy import or_
+
 from app import db
 from app.models import Schedule, UserSchedule, ScheduleAudit, User_iot
 
@@ -128,8 +130,11 @@ def assign_schedule():
     overlap = UserSchedule.query.filter(
         UserSchedule.user_id == user_id,
         UserSchedule.start_date <= (end_date or date.max),
-        (UserSchedule.end_date == None) | (UserSchedule.end_date >= start_date)
-    ).first()
+        or_(
+            UserSchedule.end_date == None,
+            UserSchedule.end_date >= start_date
+        )
+).first()
 
     if overlap:
         return jsonify(msg="El usuario ya tiene un horario asignado en ese rango"), 400

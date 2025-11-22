@@ -37,7 +37,8 @@ class User_iot(db.Model):
     fecha_nacimiento = db.Column(db.Date)
     fecha_contrato = db.Column(db.Date)
     area_trabajo = db.Column(db.String(80), index=True)
-    huella_id = db.Column(db.Integer, unique=True, nullable=True, index=True)
+    huella_id = db.Column(db.Integer, db.ForeignKey('huella.id'), unique=True, nullable=True, index=True)
+    huella = db.relationship('Huella', backref='user', uselist=False)
     rfid = db.Column(db.String(64), unique=True, index=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -78,6 +79,10 @@ class Attendance(db.Model):
     exit_time = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+class Huella(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    data = db.Column(db.LargeBinary, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class Schedule(db.Model):
