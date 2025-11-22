@@ -1,7 +1,7 @@
 # app/routes/schedule.py
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt, jwt_required, get_jwt_identity
-from datetime import datetime
+from datetime import date, datetime
 from functools import wraps
 
 from app import db
@@ -74,6 +74,8 @@ def create_schedule():
         if not nombre:
             return jsonify(msg='nombre es requerido'), 400
 
+        if not data.get("hora_entrada") or not data.get("hora_salida"):
+             return jsonify(msg="hora_entrada y hora_salida son requeridos"), 400
         hora_entrada = parse_time_str(data.get('hora_entrada'))
         hora_salida = parse_time_str(data.get('hora_salida'))
         tolerancia_entrada = int(data.get('tolerancia_entrada', 0))
@@ -123,6 +125,15 @@ def assign_schedule():
     schedule = Schedule.query.get(schedule_id)
     if not schedule:
         return jsonify(msg='Schedule no existe'), 404
+    overlap = UserSchedule.query.filter(
+        UserSchedule.user_id == user_id,
+        UserSchedule.start_date <= (end_date or date.max),
+        (UserSchedule.end_date == None) | (UserSchedule.end_date >= start_date)
+    ).first()
+
+    if overlap:
+        return jsonify(msg="El usuario ya tiene un horario asignado en ese rango"), 400
+    
     us = UserSchedule(
         user_id=user_id,
         schedule_id=schedule_id,
@@ -147,40 +158,66 @@ def update_schedule(schedule_id):
     schedule = Schedule.query.get_or_404(schedule_id)
     data = request.get_json() or {}
     cambios = []
-    for field in ['nombre', 'hora_entrada', 'tolerancia_entrada', 'hora_salida', 'tolerancia_salida', 'dias', 'tipo']:
+
+    for field in ['nombre', 'hora_entrada', 'tolerancia_entrada', 'hora_salida',
+                  'tolerancia_salida', 'dias', 'tipo']:
+
         if field not in data:
             continue
-        old = getattr(schedule, field)
+
         new = data[field]
+        old = getattr(schedule, field)
+
+        
+        if new is None or (isinstance(new, str) and new.strip() == ""):
+            return jsonify(msg=f"Valor inválido para {field}", detail="No puede estar vacío"), 400
+
         try:
+           
             if field in ['hora_entrada', 'hora_salida']:
                 new_parsed = parse_time_str(new)
                 setattr(schedule, field, new_parsed)
                 cambios.append(f"{field}: {old} -> {new_parsed}")
+
+            
             elif field in ['tolerancia_entrada', 'tolerancia_salida']:
                 new_int = int(new)
                 setattr(schedule, field, new_int)
                 cambios.append(f"{field}: {old} -> {new_int}")
+
+            
             elif field == 'dias':
                 new_days = validate_days(new)
                 setattr(schedule, field, new_days)
                 cambios.append(f"{field}: {old} -> {new_days}")
+
+            
             elif field == 'tipo':
                 new_tipo = validate_tipo(new)
                 setattr(schedule, field, new_tipo)
                 cambios.append(f"{field}: {old} -> {new_tipo}")
+
+           
             else:
                 setattr(schedule, field, new)
                 cambios.append(f"{field}: {old} -> {new}")
+
         except ValueError as e:
-            return jsonify(msg=f'Valor inválido para {field}', detail=str(e)), 400
+            return jsonify(msg=f"Valor inválido para {field}", detail=str(e)), 400
 
+    
     db.session.commit()
-    admin = _get_user_from_identity(get_jwt_identity())
-    record_audit(schedule_id=schedule.id, admin_id=admin.id if admin else None,
-                 change_type='update', details='; '.join(cambios) or 'sin cambios')
-    return jsonify(msg='Horario actualizado'), 200
 
+    admin = _get_user_from_identity(get_jwt_identity())
+
+    record_audit(
+        schedule_id=schedule.id,
+        admin_id=admin.id if admin else None,
+        change_type='update',
+        details='; '.join(cambios) or 'sin cambios'
+    )
+
+    return jsonify(msg='Horario actualizado'), 200
 
 @schedule_bp.route('/<int:schedule_id>', methods=['DELETE'])
 @jwt_required()
@@ -188,8 +225,10 @@ def update_schedule(schedule_id):
 def delete_schedule(schedule_id):
     schedule = Schedule.query.get_or_404(schedule_id)
     active_us = UserSchedule.query.filter(
-        UserSchedule.schedule_id == schedule_id
-    ).first()
+    UserSchedule.schedule_id == schedule_id,
+    (UserSchedule.end_date == None) | (UserSchedule.end_date >= date.today())
+        ).first()
+
     if active_us:
         return jsonify(msg='No se puede eliminar: existen asignaciones activas'), 400
 
