@@ -46,12 +46,11 @@ def login():
         )
 
         user_data = {
-            "id": user.id,
             "username": user.username,
-            "email": user.email,
             "role": role_name,
             "nombre": user.nombre, 
-            "apellido": user.apellido,  
+            "apellido": user.apellido,
+            "area de trabajo": user.area_trabajo,    
         }
 
         return jsonify(

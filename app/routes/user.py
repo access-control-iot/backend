@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 import base64
 
-from ..models import User_iot, Role, UserRoleEnum
+from ..models import User_iot, Role
 
 from app import db
 
@@ -37,14 +37,6 @@ def parse_date(date_str):
     return datetime.strptime(date_str, "%Y-%m-%d").date()
 
 
-def decode_fingerprint(huella_str):
-    if not huella_str:
-        return None
-    try:
-        return base64.b64decode(huella_str)
-    except:
-        raise ValueError("Huella inválida: debe estar en base64")
-
 
 @user_bp.route("/create", methods=["POST"])
 @jwt_required()
@@ -64,12 +56,13 @@ def create_user():
 
     if data.get("rfid") and User_iot.query.filter_by(rfid=data["rfid"]).first():
         return jsonify(msg="El RFID ya está asignado"), 400
-
-   
-    try:
-        huella_bytes = decode_fingerprint(data.get("huella"))
-    except ValueError as e:
-        return jsonify(msg=str(e)), 400
+    
+    huella_id = data.get("huella_id")
+    if huella_id is not None:
+        try:
+            huella_id = int(huella_id)
+        except:
+            return jsonify(msg="huella_id debe ser un número entero"), 400
 
 
     role_name = data.get("role", "empleado")
@@ -86,7 +79,7 @@ def create_user():
         fecha_nacimiento=parse_date(data.get("fecha_nacimiento")),
         fecha_contrato=parse_date(data.get("fecha_contrato")),
         area_trabajo=data.get("area_trabajo"),
-        huella=huella_bytes,
+        huella_id=huella_id,
         rfid=data.get("rfid"),
         role=role  
     )
@@ -114,12 +107,14 @@ def update_user(user_id):
                 return jsonify(msg="Este RFID ya pertenece a otro usuario"), 400
 
 
-    if "huella" in data:
-        try:
-            user.huella = decode_fingerprint(data.get("huella"))
-        except ValueError as e:
-            return jsonify(msg=str(e)), 400
-
+    if "huella_id" in data:
+            huella_id = data.get("huella_id")
+            if huella_id is not None:
+                try:
+                    user.huella_id = int(huella_id)
+                except:
+                    return jsonify(msg="huella_id debe ser un número entero"), 400
+    user.username = data.get("username", user.username)
     user.nombre = data.get("nombre", user.nombre)
     user.apellido = data.get("apellido", user.apellido)
     user.genero = data.get("genero", user.genero)

@@ -97,40 +97,27 @@ def rfid_access():
 @bp.route('/fingerprint-access', methods=['POST'])
 def fingerprint_access():
     data = request.get_json() or {}
-    huella_input = data.get('huella')
-    if not huella_input:
-        return jsonify(status='Denegado', reason='Falta huella'), 400
+    huella_id = data.get('huella_id')
 
-    huella_bytes = None
-    if isinstance(huella_input, str):
     
-        try:
-            huella_bytes = base64.b64decode(huella_input)
-        except Exception:
-            huella_bytes = huella_input.encode('utf-8')
-    elif isinstance(huella_input, (bytes, bytearray)):
-        huella_bytes = bytes(huella_input)
+    if huella_id is None:
+        return jsonify(status='Denegado', reason='Falta huella_id'), 400
 
-    user = None
-    if huella_bytes:
-        user = User_iot.query.filter_by(huella=huella_bytes).first()
-        if not user:
-
-            for u in User_iot.query.filter(User_iot.huella.isnot(None)).all():
-                if compare_biometric(u.huella, huella_bytes):
-                    user = u
-                    break
+    
+    user = User_iot.query.filter_by(huella_id=huella_id).first()
 
     now = datetime.utcnow()
+
     status = 'Permitido' if user else 'Denegado'
     reason = None if user else 'Huella no válida'
 
+   
     log = AccessLog(
         user_id=user.id if user else None,
         timestamp=now,
         sensor_type='Huella',
         status=status,
-        huella=huella_bytes if user else None,
+        huella_id=huella_id if user else None,
         reason=reason
     )
     db.session.add(log)
@@ -143,6 +130,7 @@ def fingerprint_access():
             attendance_info = register_attendance_from_access(log)
         except Exception:
             attendance_info = None
+
 
     if user:
         resp = {
@@ -158,6 +146,7 @@ def fingerprint_access():
         return jsonify(resp), 200
     else:
         return jsonify(status='Denegado', reason='Huella no válida'), 403
+
 
 @bp.route('/history', methods=['GET'])
 @jwt_required()

@@ -37,7 +37,7 @@ class User_iot(db.Model):
     fecha_nacimiento = db.Column(db.Date)
     fecha_contrato = db.Column(db.Date)
     area_trabajo = db.Column(db.String(80), index=True)
-    huella = db.Column(db.LargeBinary) 
+    huella_id = db.Column(db.Integer, unique=True, nullable=True, index=True)
     rfid = db.Column(db.String(64), unique=True, index=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -66,7 +66,7 @@ class AccessLog(db.Model):
     sensor_type = db.Column(db.String(20)) 
     status = db.Column(db.Enum(AccessStatusEnum, name="access_status_enum"), default=AccessStatusEnum.Permitido)
     rfid = db.Column(db.String(64), nullable=True)
-    huella = db.Column(db.LargeBinary, nullable=True)
+    huella_id = db.Column(db.Integer, nullable=True)
     reason = db.Column(db.String(255), nullable=True)
 
     user = db.relationship('User_iot', backref='access_logs')
