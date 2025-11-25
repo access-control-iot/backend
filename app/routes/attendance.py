@@ -147,10 +147,10 @@ def log_attendance():
     if not open_att:
 
         if now < hora_entrada:
-            estado = "Asistio_anticipado"
+            estado = "Asistencia Registrada"
 
         elif now > hora_salida:
-            estado = "Falta"
+            estado = "Falta Registrada"
 
             new_att = Attendance(
                 user_id=user.id,
