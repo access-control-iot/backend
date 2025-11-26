@@ -166,6 +166,44 @@ def assign_rfid(user_id):
 
     return jsonify(msg="RFID asignado correctamente"), 200
 
+@user_bp.route("/rfid/register", methods=["POST"])
+def register_rfid():
+ 
+    data = request.get_json() or {}
+    
+    rfid_uid = data.get("rfid")
+    user_id = data.get("user_id")
+    
+    if not rfid_uid or not user_id:
+        return jsonify(success=False, message="Se requiere rfid y user_id"), 400
+    
+    try:
+        user_id = int(user_id)
+    except:
+        return jsonify(success=False, message="user_id debe ser número entero"), 400
+    
+
+    user = User_iot.query.get(user_id)
+    if not user:
+        return jsonify(success=False, message="Usuario no encontrado"), 404
+    
+   
+    existing_user = User_iot.query.filter_by(rfid=rfid_uid).first()
+    if existing_user and existing_user.id != user_id:
+        return jsonify(success=False, message="RFID ya está asignado a otro usuario"), 400
+    
+    user.rfid = rfid_uid
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": "RFID registrado correctamente",
+        "user_id": user_id,
+        "rfid": rfid_uid,
+        "username": user.username,
+        "nombre": user.nombre
+    }), 201
+
 @user_bp.route("/huella/register", methods=["POST"])
 def register_huella():
     data = request.get_json() or {}
