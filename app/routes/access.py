@@ -8,7 +8,7 @@ import csv
 import pytz
 
 from app import db
-from app.models import User_iot, AccessLog, UserSchedule, Schedule, FailedAttempt
+from app.models import User_iot, AccessLog,Role, UserSchedule, Schedule, FailedAttempt
 bp = Blueprint('access', __name__)
 
 UTC = pytz.utc
@@ -246,3 +246,57 @@ def export_csv():
         ])
     output = si.getvalue()
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=access_logs.csv"})
+@bp.route('/setup', methods=['POST'])
+def setup_system():
+    if User_iot.query.first():
+        return jsonify({"msg": "System already setup"}), 400
+    
+    # Crear roles
+    admin_role = Role(name="admin")
+    empleado_role = Role(name="empleado")
+    db.session.add_all([admin_role, empleado_role])
+    db.session.flush()
+    
+    admin = User_iot(
+        username="admin",
+        nombre="Administrador",
+        apellido="Sistema", 
+        role=admin_role
+    )
+    admin.set_password("admin123")
+    db.session.add(admin)
+    db.session.commit()
+    
+    return jsonify({
+        "msg": "System setup completed", 
+        "admin_id": admin.id,
+        "next_step": "Register admin fingerprint via /users/huella/register"
+    }), 201
+
+@bp.route('/secure-zone/access', methods=['POST'])
+def secure_zone_access():
+    data = request.get_json()
+    huella_id = data.get('huella_id')
+    
+    user = User_iot.query.filter_by(huella_id=huella_id).first()
+    
+    if not user:
+        return jsonify({
+            "access": False,
+            "reason": "Huella no registrada",
+            "buzzer": "error"
+        }), 403
+    
+   
+    if user.role.name != "admin":
+        return jsonify({
+            "access": False, 
+            "reason": "Solo administradores",
+            "buzzer": "error"
+        }), 403
+    
+    return jsonify({
+        "access": True,
+        "user_id": user.id,
+        "buzzer": "success"
+    })
