@@ -37,8 +37,9 @@ class User_iot(db.Model):
     fecha_nacimiento = db.Column(db.Date)
     fecha_contrato = db.Column(db.Date)
     area_trabajo = db.Column(db.String(80), index=True)
-    huella_id = db.Column(db.Integer, db.ForeignKey('huella.id'), unique=True, nullable=True, index=True)
-    huella = db.relationship('Huella', backref='user', uselist=False)
+    huella_id = db.Column(db.Integer, db.ForeignKey('huella.id', ondelete='SET NULL'), unique=True, nullable=True, index=True)
+    huella = db.relationship('Huella', backref='user', uselist=False, passive_deletes=True)
+
     rfid = db.Column(db.String(64), unique=True, index=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -58,6 +59,20 @@ class User_iot(db.Model):
             "apellido": self.apellido,
             "role": self.role.name if self.role else None
         }
+    @property
+    def is_admin(self):
+        return self.role is not None and self.role.name == UserRoleEnum.admin.value
+
+    def as_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "nombre": self.nombre,
+            "apellido": self.apellido,
+            "role": self.role.name if self.role else None,
+            "huella_id": self.huella_id,
+            "rfid": self.rfid
+        }
 
 
 class AccessLog(db.Model):
@@ -65,6 +80,7 @@ class AccessLog(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user_iot.id'), nullable=True, index=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     sensor_type = db.Column(db.String(20)) 
+    device_id = db.Column(db.String(80), nullable=True, index=True) 
     status = db.Column(db.Enum(AccessStatusEnum, name="access_status_enum"), default=AccessStatusEnum.Permitido)
     rfid = db.Column(db.String(64), nullable=True)
     huella_id = db.Column(db.Integer, nullable=True)
@@ -82,8 +98,15 @@ class Attendance(db.Model):
 
 class Huella(db.Model):
     __tablename__ = 'huella'
-    id = db.Column(db.Integer, primary_key=True)  
+    id = db.Column(db.Integer, primary_key=True)
+    template = db.Column(db.LargeBinary)   
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    source = db.Column(db.String(80), nullable=True)
+
+    def to_dict_b64(self):
+        import base64
+        return {"huella_id": self.id, "template": base64.b64encode(self.template).decode()}
+
 
 
 
@@ -117,6 +140,9 @@ class FailedAttempt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user_iot.id'), nullable=True)
     identifier = db.Column(db.String(128))  
+    identifier_type = db.Column(db.String(20)) 
+    device_id = db.Column(db.String(80), nullable=True)
+    count = db.Column(db.Integer, default=1)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     reason = db.Column(db.String(255))
 

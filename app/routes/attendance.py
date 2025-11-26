@@ -12,6 +12,9 @@ from app.models import Attendance, AccessLog, User_iot, Schedule, UserSchedule
 
 bp = Blueprint('attendance', __name__)
 
+LIMA_TZ = pytz.timezone("America/Lima")
+
+
 def _get_user_from_identity(identity):
     if identity is None:
         return None
@@ -23,17 +26,22 @@ def _get_user_from_identity(identity):
         return None
     return User_iot.query.get(user_id)
 
+
 def get_user_schedule(user_id, dt):
+    
+    local_date = dt.astimezone(LIMA_TZ).date() if dt.tzinfo else dt.date()
     us = UserSchedule.query.filter(
         UserSchedule.user_id == user_id,
-        UserSchedule.start_date <= dt.date(),
-        (UserSchedule.end_date == None) | (UserSchedule.end_date >= dt.date())
+        UserSchedule.start_date <= local_date,
+        (UserSchedule.end_date == None) | (UserSchedule.end_date >= local_date)
     ).first()
     if not us:
         return None
     return Schedule.query.get(us.schedule_id)
 
+
 def check_schedule_status(schedule, dt):
+
     if schedule is None:
         return {'state': 'sin_horario', 'minutes_diff': None}
 
@@ -44,6 +52,10 @@ def check_schedule_status(schedule, dt):
 
     entrada_dt = datetime.combine(dt.date(), schedule.hora_entrada)
     salida_dt = datetime.combine(dt.date(), schedule.hora_salida)
+
+
+    entrada_dt = LIMA_TZ.localize(entrada_dt)
+    salida_dt = LIMA_TZ.localize(salida_dt)
 
     tolerancia = int(schedule.tolerancia_entrada or 0)
     minutes_diff = int((dt - entrada_dt).total_seconds() / 60)
@@ -57,153 +69,60 @@ def check_schedule_status(schedule, dt):
     else:
         return {'state': 'presente', 'minutes_diff': minutes_diff}
 
+
 def _serialize_attendance(record):
     return {
         'id': record.id,
         'user_id': record.user_id,
         'entry_time': record.entry_time.isoformat() if record.entry_time else None,
-        'exit_time': record.exit_time.isoformat() if record.exit_time else None
+        'exit_time': record.exit_time.isoformat() if record.exit_time else None,
+        'estado_entrada': record.estado_entrada
     }
 
+
 def register_attendance_from_access(access_log: AccessLog):
-   
-    if not access_log or not access_log.user_id:
+
+    if not access_log:
+        return {'ok': False, 'reason': 'no_access_log'}
+
+    if not access_log.user_id:
         return {'ok': False, 'reason': 'no_user'}
 
+
+    ts = access_log.timestamp
+    if ts is None:
+        ts = datetime.utcnow()
+
+    if ts.tzinfo is None:
+ 
+        import pytz
+        ts = pytz.utc.localize(ts)
+    lima_dt = ts.astimezone(LIMA_TZ)
+
     user_id = access_log.user_id
-    now = access_log.timestamp or datetime.utcnow()
+
+
     open_att = Attendance.query.filter_by(user_id=user_id, exit_time=None).order_by(Attendance.entry_time.desc()).first()
-    schedule = get_user_schedule(user_id, now)
-    schedule_info = check_schedule_status(schedule, now) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
+    schedule = get_user_schedule(user_id, lima_dt)
+    schedule_info = check_schedule_status(schedule, lima_dt) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
 
     if open_att:
-        open_att.exit_time = now
+
+        open_att.exit_time = access_log.timestamp
         db.session.commit()
         return {'ok': True, 'action': 'exit', 'attendance_id': open_att.id, 'schedule': schedule_info}
     else:
-        att = Attendance(user_id=user_id, entry_time=now)
+  
+        estado = schedule_info.get('state') or 'sin_horario'
+        att = Attendance(user_id=user_id, entry_time=access_log.timestamp, estado_entrada=estado)
         db.session.add(att)
         db.session.commit()
-        return {'ok': True, 'action': 'entry', 'attendance_id': att.id, 'schedule': schedule_info}
-
-@bp.route('/attendance/log', methods=['POST'])
-def log_attendance():
-    data = request.get_json() or {}
-
-    huella_id = data.get("huella_id")
-    if not huella_id:
-        return jsonify({"msg": "huella_id es requerido"}), 400
-
-    user = User_iot.query.filter_by(huella_id=huella_id).first()
-    if not user:
-        return jsonify({"msg": "Usuario con esa huella no encontrado"}), 404
-
-    lima_tz = pytz.timezone("America/Lima")
-    now = datetime.now(lima_tz)
-    today = now.date()
-
-    user_schedule = UserSchedule.query.filter(
-        UserSchedule.user_id == user.id,
-        UserSchedule.start_date <= today,
-        or_(UserSchedule.end_date.is_(None), UserSchedule.end_date >= today)
-    ).first()
-
-    if not user_schedule:
-        return jsonify({"msg": "Usuario no tiene horario asignado hoy"}), 400
-
-    schedule = user_schedule.schedule
-    weekday_map = {
-        0: "Lun", 1: "Mar", 2: "Mie", 3: "Jue",
-        4: "Vie", 5: "Sab", 6: "Dom"
-    }
-    today_label = weekday_map[now.weekday()]
-    dias_validos = schedule.dias.split(",")
-
-    if today_label not in dias_validos:
-        return jsonify({"msg": "El usuario no debe trabajar hoy"}), 400
-
-    if isinstance(schedule.hora_entrada, str):
-        hora_entrada_obj = datetime.strptime(schedule.hora_entrada, "%H:%M").time()
-    else:
-        hora_entrada_obj = schedule.hora_entrada
-
-    if isinstance(schedule.hora_salida, str):
-        hora_salida_obj = datetime.strptime(schedule.hora_salida, "%H:%M").time()
-    else:
-        hora_salida_obj = schedule.hora_salida
-
-    hora_entrada = lima_tz.localize(datetime.combine(today, hora_entrada_obj))
-    hora_salida = lima_tz.localize(datetime.combine(today, hora_salida_obj))
-
-    tolerancia = schedule.tolerancia_entrada
-    limite_tolerancia = hora_entrada + timedelta(minutes=tolerancia)
-
-    open_att = Attendance.query.filter_by(
-        user_id=user.id,
-        exit_time=None
-    ).order_by(Attendance.entry_time.desc()).first()
-
-
-    if not open_att:
-
-        if now < hora_entrada:
-            estado = "Asistencia Registrada"
-
-        elif now > hora_salida:
-            estado = "Falta Registrada"
-
-            new_att = Attendance(
-                user_id=user.id,
-                entry_time=now,
-                estado_entrada=estado,
-                exit_time=now  
-            )
-            db.session.add(new_att)
-            db.session.commit()
-
-            return jsonify({
-                "msg": "Falta registrada (no se abrió asistencia)",
-                "estado": estado,
-                "user": user.username,
-                "time": new_att.entry_time.isoformat()
-            }), 201
-
-        elif hora_entrada <= now <= limite_tolerancia:
-            estado = "dentro_tolerancia"
-
-        elif limite_tolerancia < now <= hora_salida:
-            estado = "tardanza"
-
-        new_att = Attendance(
-            user_id=user.id,
-            entry_time=now,
-            estado_entrada=estado
-        )
-        db.session.add(new_att)
-        db.session.commit()
-
-        return jsonify({
-            "msg": "Entrada registrada",
-            "estado": estado,
-            "user": user.username,
-            "entry_time": new_att.entry_time.isoformat()
-        }), 201
-
-    open_att.exit_time = now
-    db.session.commit()
-
-    return jsonify({
-        "msg": "Salida registrada",
-        "user": user.username,
-        "entry_time": open_att.entry_time.isoformat(),
-        "exit_time": open_att.exit_time.isoformat()
-    }), 200
+        return {'ok': True, 'action': 'entry', 'attendance_id': att.id, 'schedule': schedule_info, 'estado': estado}
 
 
 @bp.route('/attendance/history', methods=['GET'])
 @jwt_required()
 def get_attendance_history():
-    
     identity = get_jwt_identity()
     user = _get_user_from_identity(identity)
     if not user:
@@ -216,6 +135,7 @@ def get_attendance_history():
 
     data = [_serialize_attendance(r) for r in pag.items]
     return jsonify({'items': data, 'page': page, 'total': pag.total}), 200
+
 
 @bp.route('/attendance/exit', methods=['POST'])
 @jwt_required()
@@ -232,6 +152,7 @@ def log_exit():
     db.session.commit()
     return jsonify({'message': 'Exit time logged successfully', 'attendance': _serialize_attendance(open_att)}), 200
 
+
 @bp.route('/user/<int:user_id>', methods=['GET'])
 @jwt_required()
 def user_attendance(user_id):
@@ -241,13 +162,20 @@ def user_attendance(user_id):
         return jsonify({'msg': 'Usuario no autenticado'}), 401
     if not (caller.is_admin or caller.id == user_id):
         return jsonify({'msg': 'No autorizado'}), 403
+
     access_logs = AccessLog.query.filter_by(user_id=user_id).order_by(AccessLog.timestamp.desc()).all()
     attends = Attendance.query.filter_by(user_id=user_id).order_by(Attendance.entry_time.desc()).all()
 
     events = []
     for log in access_logs:
-        schedule = get_user_schedule(user_id, log.timestamp) if log.timestamp else None
-        schedule_status = check_schedule_status(schedule, log.timestamp) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
+    
+        ts = log.timestamp
+        if ts.tzinfo is None:
+            import pytz
+            ts = pytz.utc.localize(ts)
+        lima_ts = ts.astimezone(LIMA_TZ)
+        schedule = get_user_schedule(user_id, lima_ts) if log.timestamp else None
+        schedule_status = check_schedule_status(schedule, lima_ts) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
         events.append({
             'type': 'access',
             'id': log.id,
@@ -266,8 +194,9 @@ def user_attendance(user_id):
             'timestamp': a.entry_time.isoformat() if a.entry_time else None,
             'sensor': None,
             'access_status': 'Entry',
-            'schedule_state': (check_schedule_status(get_user_schedule(user_id, a.entry_time), a.entry_time)['state'] if a.entry_time else None),
-            'minutes_diff': (check_schedule_status(get_user_schedule(user_id, a.entry_time), a.entry_time)['minutes_diff'] if a.entry_time else None),
+            'schedule_state': (check_schedule_status(get_user_schedule(user_id, a.entry_time.astimezone(LIMA_TZ) if a.entry_time.tzinfo else pytz.utc.localize(a.entry_time).astimezone(LIMA_TZ)), a.entry_time.astimezone(LIMA_TZ))['state'] if a.entry_time else None) if a.entry_time else None,
+            'minutes_diff': None,
+            'estado_entrada': a.estado_entrada
         })
         if a.exit_time:
             events.append({
@@ -276,11 +205,12 @@ def user_attendance(user_id):
                 'timestamp': a.exit_time.isoformat(),
                 'sensor': None,
                 'access_status': 'Exit',
-                'schedule_state': (check_schedule_status(get_user_schedule(user_id, a.exit_time), a.exit_time)['state'] if a.exit_time else None),
-                'minutes_diff': (check_schedule_status(get_user_schedule(user_id, a.exit_time), a.exit_time)['minutes_diff'] if a.exit_time else None),
+                'schedule_state': None,
+                'minutes_diff': None,
             })
-    events_sorted = sorted([e for e in events if e['timestamp'] is not None], key=lambda x: x['timestamp'], reverse=True)
+    events_sorted = sorted([e for e in events if e.get('timestamp')], key=lambda x: x['timestamp'], reverse=True)
     return jsonify(events_sorted), 200
+
 
 @bp.route('/summary', methods=['GET'])
 @jwt_required()
@@ -328,6 +258,7 @@ def attendance_summary():
     for user_id, period, total in resumen:
         result.append({'user_id': user_id, 'period': str(period), 'total_registros': total})
     return jsonify(result), 200
+
 
 @bp.route('/summary/export/csv', methods=['GET'])
 @jwt_required()

@@ -170,20 +170,35 @@ def assign_rfid(user_id):
 def register_huella():
     data = request.get_json() or {}
 
-    if "huella_id" not in data:
-        return jsonify(msg="Se requiere huella_id"), 400
+    huella_id = data.get("huella_id")
+    template_b64 = data.get("template")
+
+    if not huella_id or not template_b64:
+        return jsonify(msg="Se requiere huella_id y template"), 400
 
     try:
-        hid = int(data["huella_id"])
+        huella_id = int(huella_id)
     except:
         return jsonify(msg="huella_id debe ser entero"), 400
 
+    template_bytes = base64.b64decode(template_b64)
 
-    if Huella.query.get(hid):
-        return jsonify(msg="Esta huella ya está registrada"), 400
+    huella = Huella(id=huella_id, template=template_bytes)
 
-    nueva = Huella(id=hid)
-    db.session.add(nueva)
+    db.session.merge(huella)  
     db.session.commit()
 
-    return jsonify(msg="Huella registrada correctamente", huella_id=hid), 201
+    return jsonify(msg="Huella guardada correctamente", huella_id=huella_id), 201
+
+@user_bp.route("/huella/all", methods=["GET"])
+def get_all_huellas():
+    huellas = Huella.query.all()
+
+    return jsonify([
+        {
+            "huella_id": h.id,
+            "template": base64.b64encode(h.template).decode()
+        }
+        for h in huellas
+    ]), 200
+

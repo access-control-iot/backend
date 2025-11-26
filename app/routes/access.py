@@ -4,11 +4,16 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
 from io import StringIO
 import csv
-import base64
+
+import pytz
 
 from app import db
-from app.models import User_iot, AccessLog, UserSchedule, Schedule
+from app.models import User_iot, AccessLog, UserSchedule, Schedule, FailedAttempt
 bp = Blueprint('access', __name__)
+
+UTC = pytz.utc
+LIMA_TZ = pytz.timezone("America/Lima")
+
 
 def _get_current_user_from_jwt():
     identity = get_jwt_identity()
@@ -18,6 +23,26 @@ def _get_current_user_from_jwt():
         user_id = identity
     return User_iot.query.get(user_id) if user_id else None
 
+
+def _record_failed_attempt(identifier, identifier_type, device_id=None, user_id=None, reason=None):
+   
+    fa = FailedAttempt.query.filter_by(identifier=identifier, identifier_type=identifier_type).first()
+    if not fa:
+        fa = FailedAttempt(
+            user_id=user_id,
+            identifier=identifier,
+            identifier_type=identifier_type,
+            device_id=device_id,
+            count=1,
+            reason=reason
+        )
+        db.session.add(fa)
+    else:
+        fa.count = fa.count + 1
+        fa.timestamp = datetime.utcnow()
+        fa.reason = reason or fa.reason
+    db.session.commit()
+    return fa.count
 
 
 @bp.route('/assign-rfid', methods=['POST'])
@@ -33,9 +58,14 @@ def assign_rfid():
     if not rfid:
         return jsonify(msg='Falta campo rfid'), 400
 
+
+    if User_iot.query.filter(User_iot.rfid == rfid, User_iot.id != user.id).first():
+        return jsonify(msg='RFID ya asignado a otro usuario'), 400
+
     user.rfid = rfid
     db.session.commit()
     return jsonify(msg='RFID asignado/reasignado'), 200
+
 
 @bp.route('/rfid-access', methods=['POST'])
 def rfid_access():
@@ -46,20 +76,11 @@ def rfid_access():
 
     user = User_iot.query.filter_by(rfid=rfid).first()
     now = datetime.utcnow()
-    schedule_info = {'state': 'sin_horario', 'minutes_diff': None}
-
-    if user:
-        schedule = get_user_schedule(user.id, now)
-        if schedule:
-            schedule_info = check_schedule_status(schedule, now)
-        else:
-            schedule_info = {'state': 'sin_horario', 'minutes_diff': None}
-
-    status = 'Permitido' if user else 'Denegado'
-    reason = None if user else 'RFID no registrado'
+    status = 'Permitido' if (user and user.is_admin) else 'Denegado'
+    reason = None if status == 'Permitido' else ('RFID no registrado' if not user else 'RFID no autorizado')
 
     log = AccessLog(
-        user_id=user.id if user else None,
+        user_id=user.id if (user and user.is_admin) else (user.id if user else None),
         timestamp=now,
         sensor_type='RFID',
         status=status,
@@ -69,6 +90,14 @@ def rfid_access():
     db.session.add(log)
     db.session.commit()
 
+    trigger_buzzer = False
+    failed_count = None
+    if status == 'Denegado':
+ 
+        failed_count = _record_failed_attempt(identifier=rfid, identifier_type='rfid', device_id=None, user_id=(user.id if user else None), reason=reason)
+        if failed_count >= 3:
+            trigger_buzzer = True
+
     attendance_info = None
     if status == 'Permitido':
         try:
@@ -77,32 +106,38 @@ def rfid_access():
         except Exception:
             attendance_info = None
 
+    resp = {
+        'status': status,
+        'reason': reason,
+        'trigger_buzzer': trigger_buzzer,
+        'failed_count': failed_count
+    }
+
     if user:
-        resp = {
-            'status': 'Permitido',
-            'user_id': user.nombre,
-            'estado_horario': schedule_info['state'],
-            'minutes_diff': schedule_info['minutes_diff'],
-        }
-        if attendance_info:
+        resp['user_id'] = user.id
+
+        if 'attendance_info' in locals() and attendance_info:
             resp['attendance_action'] = attendance_info.get('action')
             resp['attendance_id'] = attendance_info.get('attendance_id')
+            if 'schedule' in attendance_info:
+                resp['estado_horario'] = attendance_info['schedule'].get('state')
+                resp['minutes_diff'] = attendance_info['schedule'].get('minutes_diff')
+
+    if status == 'Permitido':
         return jsonify(resp), 200
     else:
-        return jsonify(status='Denegado', reason='RFID no registrado'), 403
+        return jsonify(resp), 403
+
 
 @bp.route('/fingerprint-access', methods=['POST'])
 def fingerprint_access():
     data = request.get_json() or {}
     huella_id = data.get('huella_id')
 
-
     if huella_id is None:
         return jsonify(status='Denegado', reason='Falta huella_id'), 400
 
-
     user = User_iot.query.filter_by(huella_id=huella_id).first()
-
     now = datetime.utcnow()
     status = 'Permitido' if user else 'Denegado'
     reason = None if user else 'Huella no válida'
@@ -118,6 +153,14 @@ def fingerprint_access():
     db.session.add(log)
     db.session.commit()
 
+    trigger_buzzer = False
+    failed_count = None
+    if status == 'Denegado':
+  
+        failed_count = _record_failed_attempt(identifier=str(huella_id), identifier_type='huella', device_id=None, user_id=None, reason=reason)
+        if failed_count >= 3:
+            trigger_buzzer = True
+
     attendance_info = None
     if status == 'Permitido':
         try:
@@ -126,24 +169,22 @@ def fingerprint_access():
         except Exception:
             attendance_info = None
 
+    resp = {
+        'status': status,
+        'reason': reason,
+        'trigger_buzzer': trigger_buzzer,
+        'failed_count': failed_count
+    }
     if user:
-        resp = {
-            'status': 'Permitido',
-            'user_id': user.id,
-        }
+        resp['user_id'] = user.id
+    if attendance_info:
+        resp['attendance_action'] = attendance_info.get('action')
+        resp['attendance_id'] = attendance_info.get('attendance_id')
+        if 'schedule' in attendance_info:
+            resp['estado_horario'] = attendance_info['schedule'].get('state')
+            resp['minutes_diff'] = attendance_info['schedule'].get('minutes_diff')
 
-        if attendance_info:
-            resp['attendance_action'] = attendance_info.get('action')
-            resp['attendance_id'] = attendance_info.get('attendance_id')
-
-            if 'schedule' in attendance_info:
-                resp['estado_horario'] = attendance_info['schedule'].get('state')
-                resp['minutes_diff'] = attendance_info['schedule'].get('minutes_diff')
-
-        return jsonify(resp), 200
-
-    else:
-        return jsonify(status='Denegado', reason='Huella no válida'), 403
+    return (jsonify(resp), 200) if status == 'Permitido' else (jsonify(resp), 403)
 
 
 @bp.route('/history', methods=['GET'])
@@ -173,6 +214,7 @@ def access_history():
             'reason': log.reason
         })
     return jsonify(result), 200
+
 
 @bp.route('/export/csv', methods=['GET'])
 @jwt_required()
@@ -204,32 +246,3 @@ def export_csv():
         ])
     output = si.getvalue()
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=access_logs.csv"})
-
-def get_user_schedule(user_id, dt):
-    us = UserSchedule.query.filter(
-        UserSchedule.user_id == user_id,
-        UserSchedule.start_date <= dt.date(),
-        (UserSchedule.end_date == None) | (UserSchedule.end_date >= dt.date())
-    ).first()
-    if not us:
-        return None
-    return Schedule.query.get(us.schedule_id)
-
-def check_schedule_status(schedule, dt):
-    if not schedule:
-        return 'sin_horario'
-    dia = ['Lun','Mar','Mie','Jue','Vie','Sab','Dom'][dt.weekday()]
-    if dia not in [d.strip() for d in schedule.dias.split(',')]:
-        return 'fuera_de_horario'
-    entrada = datetime.combine(dt.date(), schedule.hora_entrada)
-    salida = datetime.combine(dt.date(), schedule.hora_salida)
-    if dt <= entrada + timedelta(minutes=schedule.tolerancia_entrada):
-        return 'presente'
-    elif entrada + timedelta(minutes=schedule.tolerancia_entrada) < dt < salida:
-        return 'tarde'
-    elif dt >= salida + timedelta(minutes=schedule.tolerancia_salida):
-        return 'fuera_de_horario'
-    else:
-        return 'presente'
-
-
