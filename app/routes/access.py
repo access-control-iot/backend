@@ -273,11 +273,14 @@ def setup_system():
         "next_step": "Register admin fingerprint via /users/huella/register"
     }), 201
 
-@bp.route('/secure-zone/access', methods=['POST'])
+
+@bp.route('/secure-zone', methods=['POST'])
 def secure_zone_access():
-    data = request.get_json()
+    data = request.get_json() or {}
     huella_id = data.get('huella_id')
+    rfid = data.get('rfid')
     
+
     user = User_iot.query.filter_by(huella_id=huella_id).first()
     
     if not user:
@@ -287,16 +290,36 @@ def secure_zone_access():
             "buzzer": "error"
         }), 403
     
-   
+
     if user.role.name != "admin":
         return jsonify({
-            "access": False, 
+            "access": False,
             "reason": "Solo administradores",
             "buzzer": "error"
         }), 403
+    
+
+    if user.rfid != rfid:
+        return jsonify({
+            "access": False,
+            "reason": "RFID no coincide",
+            "buzzer": "error"
+        }), 403
+    
+ 
+    log = AccessLog(
+        user_id=user.id,
+        timestamp=datetime.utcnow(),
+        sensor_type="ZonaSegura",
+        status="Permitido",
+        huella_id=huella_id,
+        rfid=rfid
+    )
+    db.session.add(log)
+    db.session.commit()
     
     return jsonify({
         "access": True,
         "user_id": user.id,
         "buzzer": "success"
-    })
+    }), 200
