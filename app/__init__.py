@@ -23,12 +23,13 @@ def create_app():
     from app.routes.user import user_bp
     from app.routes.schedule import schedule_bp   
 
-    # REGISTRAR BLUEPRINTS
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(access_bp)
+  
+    app.register_blueprint(auth_bp)  # si quieres puedes añadir un url_prefix para auth también
+    app.register_blueprint(access_bp, url_prefix='/access')  # <- aquí va el cambio
     app.register_blueprint(attendance_bp)
     app.register_blueprint(user_bp)
     app.register_blueprint(schedule_bp)
+
 
     print("\n=== ROUTES LOADED ===")
     for rule in app.url_map.iter_rules():
