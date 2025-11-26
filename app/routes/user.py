@@ -215,11 +215,11 @@ def get_next_huella_id():
 
 @user_bp.route("/huella/confirm-register", methods=["POST"])
 def confirm_huella_register():
-   
     data = request.get_json() or {}
     
     huella_id = data.get("huella_id")
     user_id = data.get("user_id")
+    template_b64 = data.get("template")  
     
     if not huella_id or not user_id:
         return jsonify(msg="huella_id y user_id requeridos"), 400
@@ -234,20 +234,52 @@ def confirm_huella_register():
     if not user:
         return jsonify(msg="Usuario no encontrado"), 404
     
+
     existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
     if existing_user and existing_user.id != user_id:
         return jsonify(msg="Huella ya está asignada a otro usuario"), 400
     
 
-    huella = Huella(id=huella_id, template=b"pending")
-    db.session.merge(huella)
+    huella_existente = Huella.query.get(huella_id)
+    if not huella_existente:
+        return jsonify(msg="Huella no encontrada en la base de datos"), 404
+    
+    if huella_existente.template == b"pending" or len(huella_existente.template) == 0:
+        return jsonify(msg="Huella no tiene un template válido"), 400
     
     user.huella_id = huella_id
     db.session.commit()
     
     return jsonify({
-        "msg": "Huella registrada y asociada al usuario",
+        "success": True,
+        "message": "Huella registrada y asociada al usuario",
         "huella_id": huella_id,
         "user_id": user_id,
         "username": user.username
+    }), 201
+
+@user_bp.route("/huella/upload-template", methods=["POST"])
+def upload_huella_template():
+    data = request.get_json() or {}
+    
+    huella_id = data.get("huella_id")
+    template_b64 = data.get("template")
+    
+    if not huella_id or not template_b64:
+        return jsonify(success=False, message="Se requiere huella_id y template"), 400
+    
+    try:
+        huella_id = int(huella_id)
+        template_bytes = base64.b64decode(template_b64)
+    except Exception as e:
+        return jsonify(success=False, message=f"Error en datos: {str(e)}"), 400
+    
+    huella = Huella(id=huella_id, template=template_bytes)
+    db.session.merge(huella)
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": "Template de huella guardado correctamente",
+        "huella_id": huella_id
     }), 201
