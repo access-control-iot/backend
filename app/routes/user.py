@@ -219,33 +219,30 @@ def confirm_huella_register():
     
     huella_id = data.get("huella_id")
     user_id = data.get("user_id")
-    template_b64 = data.get("template")  
     
     if not huella_id or not user_id:
-        return jsonify(msg="huella_id y user_id requeridos"), 400
+        return jsonify(success=False, message="huella_id y user_id requeridos"), 400
     
     try:
         huella_id = int(huella_id)
         user_id = int(user_id)
     except:
-        return jsonify(msg="IDs deben ser números enteros"), 400
+        return jsonify(success=False, message="IDs deben ser números enteros"), 400
     
     user = User_iot.query.get(user_id)
     if not user:
-        return jsonify(msg="Usuario no encontrado"), 404
+        return jsonify(success=False, message="Usuario no encontrado"), 404
     
-
+   
     existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
     if existing_user and existing_user.id != user_id:
-        return jsonify(msg="Huella ya está asignada a otro usuario"), 400
+        return jsonify(success=False, message="Huella ya está asignada a otro usuario"), 400
     
-
     huella_existente = Huella.query.get(huella_id)
     if not huella_existente:
-        return jsonify(msg="Huella no encontrada en la base de datos"), 404
-    
-    if huella_existente.template == b"pending" or len(huella_existente.template) == 0:
-        return jsonify(msg="Huella no tiene un template válido"), 400
+
+        huella = Huella(id=huella_id, template=b"registered")
+        db.session.add(huella)
     
     user.huella_id = huella_id
     db.session.commit()
