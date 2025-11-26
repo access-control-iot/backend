@@ -202,43 +202,52 @@ def get_all_huellas():
         for h in huellas
     ]), 200
 
-@user_bp.route("/huella/start-enrollment", methods=["POST"])
-def start_fingerprint_enrollment():
-    
-    data = request.get_json() or {}
-    
+@user_bp.route("/huella/next-id", methods=["GET"])
+def get_next_huella_id():
+
     last_huella = Huella.query.order_by(Huella.id.desc()).first()
     next_id = (last_huella.id + 1) if last_huella else 1
     
     return jsonify({
         "huella_id": next_id,
-        "message": "Listo para registrar huella"
+        "message": "ID disponible para registro"
     }), 200
 
-@user_bp.route("/huella/complete-enrollment", methods=["POST"])
-def complete_fingerprint_enrollment():
+@user_bp.route("/huella/confirm-register", methods=["POST"])
+def confirm_huella_register():
    
     data = request.get_json() or {}
     
     huella_id = data.get("huella_id")
-    template_b64 = data.get("template")
-    user_id = data.get("user_id")  
+    user_id = data.get("user_id")
     
-    if not huella_id or not template_b64:
-        return jsonify(msg="huella_id y template requeridos"), 400
+    if not huella_id or not user_id:
+        return jsonify(msg="huella_id y user_id requeridos"), 400
     
-    template_bytes = base64.b64decode(template_b64)
-    huella = Huella(id=huella_id, template=template_bytes)
+    try:
+        huella_id = int(huella_id)
+        user_id = int(user_id)
+    except:
+        return jsonify(msg="IDs deben ser números enteros"), 400
+    
+    user = User_iot.query.get(user_id)
+    if not user:
+        return jsonify(msg="Usuario no encontrado"), 404
+    
+    existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
+    if existing_user and existing_user.id != user_id:
+        return jsonify(msg="Huella ya está asignada a otro usuario"), 400
+    
+
+    huella = Huella(id=huella_id, template=b"pending")
     db.session.merge(huella)
     
-    if user_id:
-        user = User_iot.query.get(user_id)
-        if user:
-            user.huella_id = huella_id
-    
+    user.huella_id = huella_id
     db.session.commit()
     
     return jsonify({
-        "msg": "Huella registrada y asociada",
-        "huella_id": huella_id
+        "msg": "Huella registrada y asociada al usuario",
+        "huella_id": huella_id,
+        "user_id": user_id,
+        "username": user.username
     }), 201

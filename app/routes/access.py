@@ -135,58 +135,59 @@ def fingerprint_access():
     huella_id = data.get('huella_id')
 
     if huella_id is None:
-        return jsonify(status='Denegado', reason='Falta huella_id'), 400
+        return jsonify(success=False, reason='Falta huella_id'), 400
 
     user = User_iot.query.filter_by(huella_id=huella_id).first()
-    now = datetime.utcnow()
-    status = 'Permitido' if user else 'Denegado'
-    reason = None if user else 'Huella no válida'
+    
+    if not user:
+
+        failed_count = _record_failed_attempt(
+            identifier=str(huella_id), 
+            identifier_type='huella', 
+            reason='Huella no registrada'
+        )
+        
+        return jsonify({
+            "success": False,
+            "reason": "Huella no registrada",
+            "trigger_buzzer": (failed_count >= 3)
+        }), 403
 
     log = AccessLog(
-        user_id=user.id if user else None,
-        timestamp=now,
+        user_id=user.id,
+        timestamp=datetime.utcnow(),
         sensor_type='Huella',
-        status=status,
-        huella_id=huella_id if user else None,
-        reason=reason
+        status='Permitido',
+        huella_id=huella_id,
+        reason=None
     )
     db.session.add(log)
+    
+    attendance_info = None
+    try:
+        from app.routes.attendance import register_attendance_from_access
+        attendance_info = register_attendance_from_access(log)
+    except Exception as e:
+        print(f"Error registro asistencia: {e}")
+    
     db.session.commit()
 
-    trigger_buzzer = False
-    failed_count = None
-    if status == 'Denegado':
-  
-        failed_count = _record_failed_attempt(identifier=str(huella_id), identifier_type='huella', device_id=None, user_id=None, reason=reason)
-        if failed_count >= 3:
-            trigger_buzzer = True
-
-    attendance_info = None
-    if status == 'Permitido':
-        try:
-            from app.routes.attendance import register_attendance_from_access
-            attendance_info = register_attendance_from_access(log)
-        except Exception:
-            attendance_info = None
-
     resp = {
-        'status': status,
-        'reason': reason,
-        'trigger_buzzer': trigger_buzzer,
-        'failed_count': failed_count
+        "success": True,
+        "user_id": user.id,
+        "nombre": user.nombre,
+        "apellido": user.apellido,
+        "trigger_buzzer": False
     }
-    if user:
-        resp['user_id'] = user.id
+    
     if attendance_info:
-        resp['attendance_action'] = attendance_info.get('action')
-        resp['attendance_id'] = attendance_info.get('attendance_id')
+        resp["attendance_action"] = attendance_info.get('action')
+        resp["attendance_id"] = attendance_info.get('attendance_id')
         if 'schedule' in attendance_info:
-            resp['estado_horario'] = attendance_info['schedule'].get('state')
-            resp['minutes_diff'] = attendance_info['schedule'].get('minutes_diff')
+            resp["estado_horario"] = attendance_info['schedule'].get('state')
+            resp["minutes_diff"] = attendance_info['schedule'].get('minutes_diff')
 
-    return (jsonify(resp), 200) if status == 'Permitido' else (jsonify(resp), 403)
-
-
+    return jsonify(resp), 200
 @bp.route('/history', methods=['GET'])
 @jwt_required()
 def access_history():
