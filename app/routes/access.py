@@ -129,7 +129,6 @@ def rfid_access():
         return jsonify(resp), 403
 
 
-
 @bp.route('/fingerprint-access', methods=['POST'])
 def fingerprint_access():
     data = request.get_json() or {}
@@ -154,7 +153,7 @@ def fingerprint_access():
         }), 403
 
     try:
-       
+    
         log = AccessLog(
             user_id=user.id,
             timestamp=datetime.utcnow(),
@@ -166,11 +165,11 @@ def fingerprint_access():
         db.session.add(log)
         db.session.commit()
 
- 
+      
         from app.routes.attendance import register_attendance_from_access
         attendance_info = register_attendance_from_access(log)
 
-   
+    
         resp = {
             "success": True,
             "user_id": user.id,
@@ -178,40 +177,27 @@ def fingerprint_access():
             "apellido": user.apellido,
             "trigger_buzzer": False
         }
+        
 
         if attendance_info and attendance_info.get('ok'):
             resp["attendance_action"] = attendance_info.get('action')  
             resp["attendance_id"] = attendance_info.get('attendance_id')
             
-       
+            # Información del horario
             if 'schedule' in attendance_info:
                 schedule_data = attendance_info['schedule']
                 resp["estado_horario"] = schedule_data.get('state') 
                 resp["minutes_diff"] = schedule_data.get('minutes_diff')
             
-       
             if attendance_info.get('action') == 'entry':
-                if attendance_info.get('tipo') == 'reingreso':
-                    resp["message"] = "Reingreso registrado"
-                elif resp.get("estado_horario") == 'tarde':
+                resp["message"] = "Entrada registrada"
+                if resp.get("estado_horario") == 'tarde':
                     resp["message"] = f"Entrada registrada - Llegó {resp.get('minutes_diff', 0)} min tarde"
                 elif resp.get("estado_horario") == 'presente':
                     resp["message"] = "Entrada registrada - A tiempo"
-                else:
-                    resp["message"] = attendance_info.get('message', 'Entrada registrada')
-                    
             elif attendance_info.get('action') == 'exit':
-                resp["message"] = attendance_info.get('message', 'Salida registrada')
-                if 'duracion' in attendance_info:
-                    resp["duracion_jornada"] = attendance_info['duracion']
+                resp["message"] = "Salida registrada"
         
-        
-        elif attendance_info and not attendance_info.get('ok'):
-            resp["success"] = False
-            resp["reason"] = attendance_info.get('reason')
-            resp["message"] = attendance_info.get('message')
-            resp["trigger_buzzer"] = True
-            
         return jsonify(resp), 200
 
     except Exception as e:
