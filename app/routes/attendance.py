@@ -308,3 +308,64 @@ def summary_export_csv():
         cw.writerow([user_id, period, total])
     output = si.getvalue()
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=attendance_summary.csv"})
+@bp.route('/attendance/all', methods=['GET'])
+@jwt_required()
+def attendance_all():
+    identity = get_jwt_identity()
+    caller = _get_user_from_identity(identity)
+
+    if not caller:
+        return jsonify({'msg': 'Usuario no autenticado'}), 401
+
+    if not caller.is_admin:
+        return jsonify({'msg': 'No autorizado, solo admin'}), 403
+
+    # Filtros opcionales
+    user_id = request.args.get('user_id', type=int)
+    area = request.args.get('area')
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+
+    q = Attendance.query.join(User_iot, Attendance.user_id == User_iot.id)
+
+    if user_id:
+        q = q.filter(Attendance.user_id == user_id)
+
+    if area:
+        q = q.filter(User_iot.area_trabajo == area)
+
+    if start_date:
+        start = datetime.fromisoformat(start_date)
+        q = q.filter(Attendance.entry_time >= start)
+
+    if end_date:
+        end = datetime.fromisoformat(end_date) + timedelta(days=1)
+        q = q.filter(Attendance.entry_time <= end)
+
+    q = q.order_by(Attendance.entry_time.desc())
+
+    pag = q.paginate(page=page, per_page=per_page, error_out=False)
+
+    results = []
+    for a in pag.items:
+        results.append({
+            "attendance_id": a.id,
+            "user_id": a.user_id,
+            "nombre": a.user.nombre,
+            "apellido": a.user.apellido,
+            "area_trabajo": a.user.area_trabajo,
+            "entry_time": a.entry_time.isoformat() if a.entry_time else None,
+            "exit_time": a.exit_time.isoformat() if a.exit_time else None,
+            "estado_entrada": a.estado_entrada
+        })
+
+    return jsonify({
+        "items": results,
+        "page": page,
+        "total": pag.total,
+        "pages": pag.pages
+    }), 200
+
