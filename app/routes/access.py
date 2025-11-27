@@ -140,7 +140,6 @@ def fingerprint_access():
     user = User_iot.query.filter_by(huella_id=huella_id).first()
     
     if not user:
-
         failed_count = _record_failed_attempt(
             identifier=str(huella_id), 
             identifier_type='huella', 
@@ -153,6 +152,7 @@ def fingerprint_access():
             "trigger_buzzer": (failed_count >= 3)
         }), 403
 
+ 
     log = AccessLog(
         user_id=user.id,
         timestamp=datetime.utcnow(),
@@ -162,15 +162,14 @@ def fingerprint_access():
         reason=None
     )
     db.session.add(log)
-    
+    db.session.commit()  
+
     attendance_info = None
     try:
         from app.routes.attendance import register_attendance_from_access
         attendance_info = register_attendance_from_access(log)
     except Exception as e:
         print(f"Error registro asistencia: {e}")
-    
-    db.session.commit()
 
     resp = {
         "success": True,
