@@ -48,9 +48,7 @@ def parse_date_str(d_str):
 
 
 def validate_days(dias):
-    """
-    Acepta lista/tupla o string CSV. Devuelve string CSV normalizada.
-    """
+    
     valid = {'Lun','Mar','Mie','Jue','Vie','Sab','Dom'}
     if dias is None:
         raise ValueError("dias es requerido")
@@ -161,7 +159,7 @@ def assign_schedule():
     ).all()
 
     def _to_time(t):
-        # normalize time fields
+      
         if isinstance(t, str):
             return datetime.strptime(t, "%H:%M").time()
         return t
@@ -177,7 +175,7 @@ def assign_schedule():
         e2 = _to_time(h2.hora_entrada)
         s2 = _to_time(h2.hora_salida)
 
-        # Considerar que si uno termina exactamente cuando empieza el otro => no se considera choque.
+   
         return not (s1 <= e2 or s2 <= e1)
 
     for us in existing_schedules:
