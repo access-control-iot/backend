@@ -149,7 +149,8 @@ def fingerprint_access():
         return jsonify({
             "success": False,
             "reason": "Huella no registrada",
-            "trigger_buzzer": (failed_count >= 3)
+            "trigger_buzzer": (failed_count >= 3),
+             "failed_count": failed_count 
         }), 403
 
     try:
