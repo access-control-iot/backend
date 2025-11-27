@@ -308,64 +308,81 @@ def summary_export_csv():
         cw.writerow([user_id, period, total])
     output = si.getvalue()
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=attendance_summary.csv"})
-@bp.route('/attendance/all', methods=['GET'])
+
+@bp.route('/admin/report', methods=['GET'])
 @jwt_required()
-def attendance_all():
+def admin_attendance_report():
+
     identity = get_jwt_identity()
     caller = _get_user_from_identity(identity)
-
     if not caller:
         return jsonify({'msg': 'Usuario no autenticado'}), 401
-
     if not caller.is_admin:
-        return jsonify({'msg': 'No autorizado, solo admin'}), 403
+        return jsonify({'msg': 'Solo administradores pueden ver este reporte'}), 403
 
-    # Filtros opcionales
-    user_id = request.args.get('user_id', type=int)
-    area = request.args.get('area')
+
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
+    user_id = request.args.get('user_id')
+    area = request.args.get('area')
 
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 50, type=int)
+ 
+    query = Attendance.query.join(User_iot, Attendance.user_id == User_iot.id)
 
-    q = Attendance.query.join(User_iot, Attendance.user_id == User_iot.id)
-
-    if user_id:
-        q = q.filter(Attendance.user_id == user_id)
-
-    if area:
-        q = q.filter(User_iot.area_trabajo == area)
-
+   
     if start_date:
-        start = datetime.fromisoformat(start_date)
-        q = q.filter(Attendance.entry_time >= start)
-
+        start_dt = datetime.fromisoformat(start_date)
+        query = query.filter(Attendance.entry_time >= start_dt)
+    
     if end_date:
-        end = datetime.fromisoformat(end_date) + timedelta(days=1)
-        q = q.filter(Attendance.entry_time <= end)
+        end_dt = datetime.fromisoformat(end_date) + timedelta(days=1)
+        query = query.filter(Attendance.entry_time <= end_dt)
+    
+    if user_id:
+        query = query.filter(Attendance.user_id == int(user_id))
+    
+    if area:
+        query = query.filter(User_iot.area_trabajo == area)
 
-    q = q.order_by(Attendance.entry_time.desc())
+ 
+    attendances = query.order_by(Attendance.entry_time.desc()).all()
 
-    pag = q.paginate(page=page, per_page=per_page, error_out=False)
-
-    results = []
-    for a in pag.items:
-        results.append({
-            "attendance_id": a.id,
-            "user_id": a.user_id,
-            "nombre": a.user.nombre,
-            "apellido": a.user.apellido,
-            "area_trabajo": a.user.area_trabajo,
-            "entry_time": a.entry_time.isoformat() if a.entry_time else None,
-            "exit_time": a.exit_time.isoformat() if a.exit_time else None,
-            "estado_entrada": a.estado_entrada
+    result = []
+    for att in attendances:
+        user = User_iot.query.get(att.user_id)
+        result.append({
+            'attendance_id': att.id,
+            'user_id': att.user_id,
+            'username': user.username if user else 'N/A',
+            'nombre': user.nombre if user else 'N/A',
+            'apellido': user.apellido if user else 'N/A',
+            'area_trabajo': user.area_trabajo if user else 'N/A',
+            'entry_time': att.entry_time.isoformat() if att.entry_time else None,
+            'exit_time': att.exit_time.isoformat() if att.exit_time else None,
+            'estado_entrada': att.estado_entrada,
+            'duracion_jornada': _calculate_work_duration(att.entry_time, att.exit_time),
+            'created_at': att.created_at.isoformat() if att.created_at else None
         })
 
     return jsonify({
-        "items": results,
-        "page": page,
-        "total": pag.total,
-        "pages": pag.pages
+        'total_registros': len(result),
+        'filtros': {
+            'start_date': start_date,
+            'end_date': end_date,
+            'user_id': user_id,
+            'area': area
+        },
+        'asistencias': result
     }), 200
 
+
+def _calculate_work_duration(entry_time, exit_time):
+
+    if not entry_time or not exit_time:
+        return None
+    
+    duration = exit_time - entry_time
+    hours = int(duration.total_seconds() // 3600)
+    minutes = int((duration.total_seconds() % 3600) // 60)
+    
+    return f"{hours}h {minutes}m"
