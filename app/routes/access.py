@@ -152,41 +152,62 @@ def fingerprint_access():
             "trigger_buzzer": (failed_count >= 3)
         }), 403
 
- 
-    log = AccessLog(
-        user_id=user.id,
-        timestamp=datetime.utcnow(),
-        sensor_type='Huella',
-        status='Permitido',
-        huella_id=huella_id,
-        reason=None
-    )
-    db.session.add(log)
-    db.session.commit()  
-
-    attendance_info = None
     try:
+    
+        log = AccessLog(
+            user_id=user.id,
+            timestamp=datetime.utcnow(),
+            sensor_type='Huella',
+            status='Permitido',
+            huella_id=huella_id,
+            reason=None
+        )
+        db.session.add(log)
+        db.session.commit()
+
+      
         from app.routes.attendance import register_attendance_from_access
         attendance_info = register_attendance_from_access(log)
-    except Exception as e:
-        print(f"Error registro asistencia: {e}")
 
-    resp = {
-        "success": True,
-        "user_id": user.id,
-        "nombre": user.nombre,
-        "apellido": user.apellido,
-        "trigger_buzzer": False
-    }
     
-    if attendance_info:
-        resp["attendance_action"] = attendance_info.get('action')
-        resp["attendance_id"] = attendance_info.get('attendance_id')
-        if 'schedule' in attendance_info:
-            resp["estado_horario"] = attendance_info['schedule'].get('state')
-            resp["minutes_diff"] = attendance_info['schedule'].get('minutes_diff')
+        resp = {
+            "success": True,
+            "user_id": user.id,
+            "nombre": user.nombre,
+            "apellido": user.apellido,
+            "trigger_buzzer": False
+        }
+        
 
-    return jsonify(resp), 200
+        if attendance_info and attendance_info.get('ok'):
+            resp["attendance_action"] = attendance_info.get('action')  
+            resp["attendance_id"] = attendance_info.get('attendance_id')
+            
+            # Información del horario
+            if 'schedule' in attendance_info:
+                schedule_data = attendance_info['schedule']
+                resp["estado_horario"] = schedule_data.get('state') 
+                resp["minutes_diff"] = schedule_data.get('minutes_diff')
+            
+            if attendance_info.get('action') == 'entry':
+                resp["message"] = "Entrada registrada"
+                if resp.get("estado_horario") == 'tarde':
+                    resp["message"] = f"Entrada registrada - Llegó {resp.get('minutes_diff', 0)} min tarde"
+                elif resp.get("estado_horario") == 'presente':
+                    resp["message"] = "Entrada registrada - A tiempo"
+            elif attendance_info.get('action') == 'exit':
+                resp["message"] = "Salida registrada"
+        
+        return jsonify(resp), 200
+
+    except Exception as e:
+        print(f"Error en fingerprint-access: {e}")
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "reason": "Error interno del sistema",
+            "trigger_buzzer": True
+        }), 500
 @bp.route('/history', methods=['GET'])
 @jwt_required()
 def access_history():
