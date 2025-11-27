@@ -322,36 +322,13 @@ def upload_huella_template():
 @user_bp.route("/", methods=["GET"])
 @jwt_required()
 @admin_required
-def list_users():
-    role = request.args.get("role")           
-    nombre = request.args.get("nombre")
-    apellido = request.args.get("apellido")
-    area = request.args.get("area_trabajo")
-    rfid = request.args.get("rfid")
-    huella_id = request.args.get("huella_id")
-
-    page = request.args.get("page", 1, type=int)
-    per_page = request.args.get("per_page", 20, type=int)
-
-    query = User_iot.query
-    if role:
-        query = query.join(Role).filter(Role.name == role)
-
-    if nombre:
-        query = query.filter(User_iot.nombre.ilike(f"%{nombre}%"))
-
-    if apellido:
-        query = query.filter(User_iot.apellido.ilike(f"%{apellido}%"))
-
-    if area:
-        query = query.filter(User_iot.area_trabajo.ilike(f"%{area}%"))
-
-    if rfid:
-        query = query.filter(User_iot.rfid == rfid)
-
-    if huella_id:
-        query = query.filter(User_iot.huella_id == huella_id)
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+def list_empleados():
+    empleados = (
+        User_iot.query
+        .join(Role)
+        .filter(Role.name == "empleado")
+        .all()
+    )
 
     users_data = [
         {
@@ -362,15 +339,12 @@ def list_users():
             "role": u.role.name if u.role else None,
             "area_trabajo": u.area_trabajo,
             "huella_id": u.huella_id,
-            "rfid": u.rfid,
+            "rfid": u.rfid
         }
-        for u in pagination.items
+        for u in empleados
     ]
 
     return jsonify({
         "users": users_data,
-        "total": pagination.total,
-        "page": pagination.page,
-        "pages": pagination.pages,
-        "per_page": pagination.per_page
+        "total": len(users_data)
     }), 200
