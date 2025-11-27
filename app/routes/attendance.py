@@ -81,43 +81,120 @@ def _serialize_attendance(record):
 
 
 def register_attendance_from_access(access_log: AccessLog):
-
-    if not access_log:
-        return {'ok': False, 'reason': 'no_access_log'}
-
-    if not access_log.user_id:
-        return {'ok': False, 'reason': 'no_user'}
-
+    if not access_log or not access_log.user_id:
+        return {'ok': False, 'reason': 'no_access_log_or_user'}
 
     ts = access_log.timestamp
     if ts is None:
         ts = datetime.utcnow()
 
-    if ts.tzinfo is None:
- 
-        import pytz
-        ts = pytz.utc.localize(ts)
-    lima_dt = ts.astimezone(LIMA_TZ)
 
+    if ts.tzinfo is None:
+        ts = pytz.utc.localize(ts)
+    
+    lima_dt = ts.astimezone(LIMA_TZ)
     user_id = access_log.user_id
 
+    start_of_day = lima_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = start_of_day + timedelta(days=1)
+    
+    start_of_day_utc = start_of_day.astimezone(pytz.utc)
+    end_of_day_utc = end_of_day.astimezone(pytz.utc)
+    
+    registros_hoy = Attendance.query.filter(
+        Attendance.user_id == user_id,
+        Attendance.entry_time >= start_of_day_utc,
+        Attendance.entry_time < end_of_day_utc
+    ).order_by(Attendance.entry_time.desc()).all()
 
-    open_att = Attendance.query.filter_by(user_id=user_id, exit_time=None).order_by(Attendance.entry_time.desc()).first()
     schedule = get_user_schedule(user_id, lima_dt)
     schedule_info = check_schedule_status(schedule, lima_dt) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
 
-    if open_att:
 
-        open_att.exit_time = access_log.timestamp
-        db.session.commit()
-        return {'ok': True, 'action': 'exit', 'attendance_id': open_att.id, 'schedule': schedule_info}
-    else:
-  
+    if not registros_hoy:
         estado = schedule_info.get('state') or 'sin_horario'
-        att = Attendance(user_id=user_id, entry_time=access_log.timestamp, estado_entrada=estado)
+        att = Attendance(
+            user_id=user_id, 
+            entry_time=ts, 
+            estado_entrada=estado
+        )
         db.session.add(att)
         db.session.commit()
-        return {'ok': True, 'action': 'entry', 'attendance_id': att.id, 'schedule': schedule_info, 'estado': estado}
+        return {
+            'ok': True, 
+            'action': 'entry', 
+            'attendance_id': att.id, 
+            'schedule': schedule_info, 
+            'estado': estado,
+            'message': 'Entrada registrada - Inicio de jornada'
+        }
+    
+
+    ultimo_registro = registros_hoy[0]
+    
+
+    if ultimo_registro.exit_time is None:
+        
+        tiempo_minimo = timedelta(minutes=1)  
+        
+        if ts - ultimo_registro.entry_time < tiempo_minimo:
+            return {
+                'ok': False,
+                'reason': 'tiempo_minimo_no_alcanzado',
+                'message': 'Espere al menos 1 minuto para marcar salida'
+            }
+        
+        ultimo_registro.exit_time = ts
+        db.session.commit()
+        
+ 
+        duracion = ultimo_registro.exit_time - ultimo_registro.entry_time
+        horas = int(duracion.total_seconds() // 3600)
+        minutos = int((duracion.total_seconds() % 3600) // 60)
+        
+        return {
+            'ok': True, 
+            'action': 'exit', 
+            'attendance_id': ultimo_registro.id, 
+            'schedule': schedule_info,
+            'duracion': f"{horas}h {minutos}m",
+            'message': f'Salida registrada - Jornada: {horas}h {minutos}m'
+        }
+    
+    else:
+   
+        tiempo_entre_registros = ts - ultimo_registro.exit_time
+        tiempo_minimo_reingreso = timedelta(minutes=5)  
+        
+        if tiempo_entre_registros < tiempo_minimo_reingreso:
+            return {
+                'ok': False,
+                'reason': 'reingreso_demasiado_rapido',
+                'message': f'Espere {int((tiempo_minimo_reingreso - tiempo_entre_registros).total_seconds() / 60)} minutos para reingresar'
+            }
+        
+        estado = schedule_info.get('state') or 'sin_horario'
+       
+        if estado == 'presente' and len(registros_hoy) > 0:
+            estado = 'reingreso'
+        
+        nueva_entrada = Attendance(
+            user_id=user_id, 
+            entry_time=ts, 
+            estado_entrada=estado
+        )
+        db.session.add(nueva_entrada)
+        db.session.commit()
+        
+        return {
+            'ok': True, 
+            'action': 'entry', 
+            'attendance_id': nueva_entrada.id, 
+            'schedule': schedule_info, 
+            'estado': estado,
+            'message': 'Entrada registrada - Reingreso a jornada',
+            'tipo': 'reingreso'
+        }
 
 
 @bp.route('/attendance/history', methods=['GET'])
