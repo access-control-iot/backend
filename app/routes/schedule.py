@@ -298,6 +298,7 @@ def schedule_audit():
 
 @schedule_bp.route('/', methods=['GET'])
 @jwt_required()
+@admin_required
 def list_schedules():
     schedules = Schedule.query.order_by(Schedule.nombre).all()
     result = []
@@ -313,3 +314,33 @@ def list_schedules():
             'tipo': s.tipo
         })
     return jsonify(result), 200
+
+@schedule_bp.route('/my', methods=['GET'])
+@jwt_required()
+def get_my_schedule():
+    identity = get_jwt_identity()
+    user = _get_user_from_identity(identity)
+
+    if not user:
+        return jsonify(msg="Usuario no encontrado"), 404
+
+    user_schedules = UserSchedule.query.filter_by(user_id=user.id).all()
+
+    result = []
+    for us in user_schedules:
+        s = us.schedule
+        result.append({
+            "schedule_id": s.id,
+            "nombre": s.nombre,
+            "hora_entrada": s.hora_entrada.strftime('%H:%M'),
+            "tolerancia_entrada": s.tolerancia_entrada,
+            "hora_salida": s.hora_salida.strftime('%H:%M'),
+            "tolerancia_salida": s.tolerancia_salida,
+            "dias": s.dias,
+            "tipo": s.tipo,
+            "start_date": us.start_date.isoformat() if us.start_date else None,
+            "end_date": us.end_date.isoformat() if us.end_date else None
+        })
+
+    return jsonify(result), 200
+
