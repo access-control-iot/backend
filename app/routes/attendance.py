@@ -496,7 +496,7 @@ def get_users_for_admin():
     if not admin_user or not admin_user.is_admin:
         return jsonify({'msg': 'No autorizado'}), 403
 
-    users = User_iot.query.filter_by(activo=True).order_by(User_iot.nombre).all()
+    users = User_iot.query.order_by(User_iot.nombre).all()
     
     users_list = [{
         'id': user.id,
