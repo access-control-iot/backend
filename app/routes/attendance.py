@@ -400,3 +400,113 @@ def _calculate_work_duration(entry_time, exit_time):
     minutes = int((duration.total_seconds() % 3600) // 60)
     
     return f"{hours}h {minutes}m"
+
+@bp.route('/admin/report', methods=['GET'])
+@jwt_required()
+def admin_attendance_report():
+
+    identity = get_jwt_identity()
+    admin_user = _get_user_from_identity(identity)
+    
+    if not admin_user or not admin_user.is_admin:
+        return jsonify({'msg': 'No autorizado - Se requiere rol de administrador'}), 403
+
+
+    user_id = request.args.get('user_id', type=int)
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+    area = request.args.get('area', '').strip()
+
+
+    query = db.session.query(
+        Attendance,
+        User_iot
+    ).join(
+        User_iot, Attendance.user_id == User_iot.id
+    )
+
+
+    if user_id:
+        query = query.filter(Attendance.user_id == user_id)
+    
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            start_dt = LIMA_TZ.localize(datetime.combine(start_date, datetime.min.time()))
+            query = query.filter(Attendance.entry_time >= start_dt)
+        except ValueError:
+            return jsonify({'msg': 'Formato de fecha inicial inválido'}), 400
+    
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            end_dt = LIMA_TZ.localize(datetime.combine(end_date, datetime.max.time()))
+            query = query.filter(Attendance.entry_time <= end_dt)
+        except ValueError:
+            return jsonify({'msg': 'Formato de fecha final inválido'}), 400
+    
+    if area:
+        query = query.filter(User_iot.area_trabajo.ilike(f'%{area}%'))
+
+
+    query = query.order_by(Attendance.entry_time.desc())
+
+
+    results = query.all()
+
+
+    asistencias = []
+    for attendance, user in results:
+   
+        duracion_jornada = None
+        if attendance.entry_time and attendance.exit_time:
+            duration = attendance.exit_time - attendance.entry_time
+            hours = int(duration.total_seconds() // 3600)
+            minutes = int((duration.total_seconds() % 3600) // 60)
+            duracion_jornada = f"{hours}h {minutes}m"
+
+        asistencia_data = {
+            'id': attendance.id,
+            'user_id': user.id,
+            'nombre': user.nombre,
+            'apellido': user.apellido,
+            'username': user.username,
+            'area_trabajo': user.area_trabajo,
+            'entry_time': attendance.entry_time.isoformat() if attendance.entry_time else None,
+            'exit_time': attendance.exit_time.isoformat() if attendance.exit_time else None,
+            'estado_entrada': attendance.estado_entrada,
+            'duracion_jornada': duracion_jornada
+        }
+        asistencias.append(asistencia_data)
+
+    return jsonify({
+        'success': True,
+        'asistencias': asistencias,
+        'total': len(asistencias)
+    }), 200
+
+
+@bp.route('/admin/users', methods=['GET'])
+@jwt_required()
+def get_users_for_admin():
+
+    identity = get_jwt_identity()
+    admin_user = _get_user_from_identity(identity)
+    
+    if not admin_user or not admin_user.is_admin:
+        return jsonify({'msg': 'No autorizado'}), 403
+
+    users = User_iot.query.filter_by(activo=True).order_by(User_iot.nombre).all()
+    
+    users_list = [{
+        'id': user.id,
+        'nombre': user.nombre,
+        'apellido': user.apellido,
+        'username': user.username,
+        'area_trabajo': user.area_trabajo
+    } for user in users]
+
+    return jsonify({
+        'success': True,
+        'users': users_list
+    }), 200
