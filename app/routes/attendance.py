@@ -510,3 +510,67 @@ def get_users_for_admin():
         'success': True,
         'users': users_list
     }), 200
+
+@bp.route('/my-attendance', methods=['GET'])
+@jwt_required()
+def my_attendance_report():
+   
+    identity = get_jwt_identity()
+    user = _get_user_from_identity(identity)
+    
+    if not user:
+        return jsonify({'success': False, 'reason': 'Usuario no autenticado'}), 401
+
+    
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+
+    
+    query = Attendance.query.filter_by(user_id=user.id)
+
+   
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            start_dt = LIMA_TZ.localize(datetime.combine(start_date, datetime.min.time()))
+            query = query.filter(Attendance.entry_time >= start_dt)
+        except ValueError:
+            return jsonify({'success': False, 'reason': 'Formato de fecha inicial inválido'}), 400
+    
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            end_dt = LIMA_TZ.localize(datetime.combine(end_date, datetime.max.time()))
+            query = query.filter(Attendance.entry_time <= end_dt)
+        except ValueError:
+            return jsonify({'success': False, 'reason': 'Formato de fecha final inválido'}), 400
+
+
+    results = query.order_by(Attendance.entry_time.desc()).all()
+
+    
+    asistencias = []
+    for attendance in results:
+        duracion_jornada = _calculate_work_duration(attendance.entry_time, attendance.exit_time)
+        
+        asistencia_data = {
+            'id': attendance.id,
+            'entry_time': attendance.entry_time.isoformat() if attendance.entry_time else None,
+            'exit_time': attendance.exit_time.isoformat() if attendance.exit_time else None,
+            'estado_entrada': attendance.estado_entrada,
+            'duracion_jornada': duracion_jornada
+        }
+        asistencias.append(asistencia_data)
+
+    return jsonify({
+        'success': True,
+        'asistencias': asistencias,
+        'total': len(asistencias),
+        'user_info': {
+            'id': user.id,
+            'nombre': user.nombre,
+            'apellido': user.apellido,
+            'username': user.username,
+            'area_trabajo': user.area_trabajo
+        }
+    }), 200
