@@ -159,53 +159,6 @@ def rfid_access():
         "trigger_buzzer": False
     }), 200
 
-
-@bp.route('/fingerprint-access', methods=['POST'])
-def fingerprint_access():
- 
-    data = request.get_json() or {}
-    huella_id = data.get('huella_id')
-
-    if huella_id is None:
-        return jsonify(success=False, reason='Falta huella_id'), 400
-
-    user = User_iot.query.filter_by(huella_id=huella_id).first()
-    
-    if not user or not user.activo:
-        failed_count = _record_failed_attempt(
-            identifier=str(huella_id), 
-            identifier_type='huella', 
-            reason='Huella no registrada o usuario inactivo'
-        )
-        return jsonify({
-            "success": False,
-            "reason": "Acceso denegado",
-            "trigger_buzzer": (failed_count >= 3),
-            "failed_count": failed_count
-        }), 403
-
-
-    log = AccessLog(
-        user_id=user.id,
-        timestamp=datetime.utcnow(),
-        sensor_type='Huella',
-        status='Permitido',
-        huella_id=huella_id,
-        reason=None
-    )
-    db.session.add(log)
-    db.session.commit()
-
-    return jsonify({
-        "success": True,
-        "user_id": user.id,
-        "nombre": user.nombre,
-        "apellido": user.apellido,
-        "message": "Acceso permitido",
-        "trigger_buzzer": False
-    }), 200
-
-
 @bp.route('/secure-zone', methods=['POST'])
 def secure_zone_access():
 
