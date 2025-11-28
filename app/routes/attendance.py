@@ -28,7 +28,6 @@ def _get_user_from_identity(identity):
 
 
 def get_user_schedule(user_id, dt):
-    
     local_date = dt.astimezone(LIMA_TZ).date() if dt.tzinfo else dt.date()
     us = UserSchedule.query.filter(
         UserSchedule.user_id == user_id,
@@ -41,7 +40,6 @@ def get_user_schedule(user_id, dt):
 
 
 def check_schedule_status(schedule, dt):
-
     if schedule is None:
         return {'state': 'sin_horario', 'minutes_diff': None}
 
@@ -52,7 +50,6 @@ def check_schedule_status(schedule, dt):
 
     entrada_dt = datetime.combine(dt.date(), schedule.hora_entrada)
     salida_dt = datetime.combine(dt.date(), schedule.hora_salida)
-
 
     entrada_dt = LIMA_TZ.localize(entrada_dt)
     salida_dt = LIMA_TZ.localize(salida_dt)
@@ -80,39 +77,237 @@ def _serialize_attendance(record):
     }
 
 
+def get_attendance_message(schedule_status, action):
+
+    if action == 'entry':
+        if schedule_status['state'] == 'presente':
+            return 'Entrada registrada - A tiempo'
+        elif schedule_status['state'] == 'tarde':
+            return f'Entrada registrada - Llegó {schedule_status["minutes_diff"]} minutos tarde'
+        elif schedule_status['state'] == 'sin_horario':
+            return 'Entrada registrada - Sin horario asignado'
+        else:
+            return 'Entrada registrada - Fuera de horario'
+    elif action == 'exit':
+        return 'Salida registrada correctamente'
+    return 'Asistencia registrada'
+
+
+def determine_attendance_action(user_id, current_time):
+
+    today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+    
+
+    open_attendance = Attendance.query.filter(
+        Attendance.user_id == user_id,
+        Attendance.entry_time >= today_start,
+        Attendance.entry_time <= today_end,
+        Attendance.exit_time.is_(None)
+    ).first()
+    
+    if open_attendance:
+        return 'exit'  
+    else:
+        return 'entry'  
+
+
+
+@bp.route('/fingerprint-attendance', methods=['POST'])
+def fingerprint_attendance():
+   
+    data = request.get_json() or {}
+    huella_id = data.get('huella_id')
+
+    if huella_id is None:
+        return jsonify(success=False, reason='Falta huella_id'), 400
+
+    user = User_iot.query.filter_by(huella_id=huella_id).first()
+    
+    if not user:
+        return jsonify({
+            "success": False,
+            "reason": "Huella no registrada"
+        }), 403
+
+    try:
+     
+        lima_now = datetime.now(LIMA_TZ)
+        
+
+        action = determine_attendance_action(user.id, lima_now)
+        
+
+        schedule = get_user_schedule(user.id, lima_now)
+        schedule_status = check_schedule_status(schedule, lima_now) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
+
+        if action == 'entry':
+   
+            return register_attendance_entry(user, lima_now, schedule_status)
+        else:
+          
+            return register_attendance_exit(user, lima_now)
+
+    except Exception as e:
+        print(f"Error en fingerprint-attendance: {e}")
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "reason": "Error interno del sistema"
+        }), 500
+
+
+def register_attendance_entry(user, timestamp, schedule_status):
+    today_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+    
+    existing_entry = Attendance.query.filter(
+        Attendance.user_id == user.id,
+        Attendance.entry_time >= today_start,
+        Attendance.entry_time <= today_end
+    ).first()
+    
+    if existing_entry:
+        return jsonify({
+            "success": False,
+            "reason": "Ya tiene una entrada registrada hoy"
+        }), 400
+    
+
+    attendance = Attendance(
+        user_id=user.id,
+        entry_time=timestamp,
+        estado_entrada=schedule_status['state']
+    )
+    db.session.add(attendance)
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "action": "entry",
+        "attendance_id": attendance.id,
+        "user_id": user.id,
+        "nombre": user.nombre,
+        "apellido": user.apellido,
+        "entry_time": timestamp.isoformat(),
+        "estado_entrada": schedule_status['state'],
+        "minutes_diff": schedule_status['minutes_diff'],
+        "message": get_attendance_message(schedule_status, 'entry')
+    }), 201
+
+
+def register_attendance_exit(user, timestamp):
+
+    today_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+    
+    open_attendance = Attendance.query.filter(
+        Attendance.user_id == user.id,
+        Attendance.entry_time >= today_start,
+        Attendance.entry_time <= today_end,
+        Attendance.exit_time.is_(None)
+    ).first()
+    
+    if not open_attendance:
+        return jsonify({
+            "success": False,
+            "reason": "No se encontró entrada registrada para hoy"
+        }), 404
+    
+
+    open_attendance.exit_time = timestamp
+    db.session.commit()
+    
+
+    duration = open_attendance.exit_time - open_attendance.entry_time
+    hours = int(duration.total_seconds() // 3600)
+    minutes = int((duration.total_seconds() % 3600) // 60)
+    
+    return jsonify({
+        "success": True,
+        "action": "exit",
+        "attendance_id": open_attendance.id,
+        "user_id": user.id,
+        "nombre": user.nombre,
+        "apellido": user.apellido,
+        "exit_time": timestamp.isoformat(),
+        "duracion_jornada": f"{hours}h {minutes}m",
+        "message": get_attendance_message({}, 'exit')
+    }), 200
+
+
+
+@bp.route('/entry', methods=['POST'])
+@jwt_required()
+def manual_entry():
+ 
+    identity = get_jwt_identity()
+    user = _get_user_from_identity(identity)
+    
+    if not user:
+        return jsonify({'success': False, 'reason': 'Usuario no autenticado'}), 401
+
+    lima_now = datetime.now(LIMA_TZ)
+    schedule = get_user_schedule(user.id, lima_now)
+    schedule_status = check_schedule_status(schedule, lima_now) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
+    
+    return register_attendance_entry(user, lima_now, schedule_status)
+
+
+@bp.route('/exit', methods=['POST'])
+@jwt_required()
+def manual_exit():
+
+    identity = get_jwt_identity()
+    user = _get_user_from_identity(identity)
+    
+    if not user:
+        return jsonify({'success': False, 'reason': 'Usuario no autenticado'}), 401
+
+    lima_now = datetime.now(LIMA_TZ)
+    return register_attendance_exit(user, lima_now)
+
+
+
 def register_attendance_from_access(access_log: AccessLog):
-
-    if not access_log:
-        return {'ok': False, 'reason': 'no_access_log'}
-
-    if not access_log.user_id:
-        return {'ok': False, 'reason': 'no_user'}
+ 
+    if not access_log or not access_log.user_id:
+        return {'ok': False, 'reason': 'Datos insuficientes'}
 
 
     ts = access_log.timestamp
-    if ts is None:
-        ts = datetime.utcnow()
-
     if ts.tzinfo is None:
- 
-        import pytz
         ts = pytz.utc.localize(ts)
     lima_dt = ts.astimezone(LIMA_TZ)
 
     user_id = access_log.user_id
+    
 
-
-    open_att = Attendance.query.filter_by(user_id=user_id, exit_time=None).order_by(Attendance.entry_time.desc()).first()
+    action = determine_attendance_action(user_id, lima_dt)
+    
     schedule = get_user_schedule(user_id, lima_dt)
     schedule_info = check_schedule_status(schedule, lima_dt) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
 
-    if open_att:
-
-        open_att.exit_time = access_log.timestamp
-        db.session.commit()
-        return {'ok': True, 'action': 'exit', 'attendance_id': open_att.id, 'schedule': schedule_info}
-    else:
+    if action == 'exit':
   
+        today_start = lima_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+        
+        open_att = Attendance.query.filter(
+            Attendance.user_id == user_id,
+            Attendance.entry_time >= today_start,
+            Attendance.entry_time <= today_end,
+            Attendance.exit_time.is_(None)
+        ).first()
+        
+        if open_att:
+            open_att.exit_time = access_log.timestamp
+            db.session.commit()
+            return {'ok': True, 'action': 'exit', 'attendance_id': open_att.id, 'schedule': schedule_info}
+        else:
+            return {'ok': False, 'reason': 'No se encontró entrada para cerrar'}
+    else:
+   
         estado = schedule_info.get('state') or 'sin_horario'
         att = Attendance(user_id=user_id, entry_time=access_log.timestamp, estado_entrada=estado)
         db.session.add(att)
@@ -120,7 +315,8 @@ def register_attendance_from_access(access_log: AccessLog):
         return {'ok': True, 'action': 'entry', 'attendance_id': att.id, 'schedule': schedule_info, 'estado': estado}
 
 
-@bp.route('/attendance/history', methods=['GET'])
+
+@bp.route('/history', methods=['GET'])
 @jwt_required()
 def get_attendance_history():
     identity = get_jwt_identity()
@@ -135,22 +331,6 @@ def get_attendance_history():
 
     data = [_serialize_attendance(r) for r in pag.items]
     return jsonify({'items': data, 'page': page, 'total': pag.total}), 200
-
-
-@bp.route('/attendance/exit', methods=['POST'])
-@jwt_required()
-def log_exit():
-    identity = get_jwt_identity()
-    user = _get_user_from_identity(identity)
-    if not user:
-        return jsonify({'msg': 'Usuario no autenticado'}), 401
-
-    open_att = Attendance.query.filter_by(user_id=user.id, exit_time=None).order_by(Attendance.entry_time.desc()).first()
-    if not open_att:
-        return jsonify({'message': 'No entry record found'}), 404
-    open_att.exit_time = datetime.utcnow()
-    db.session.commit()
-    return jsonify({'message': 'Exit time logged successfully', 'attendance': _serialize_attendance(open_att)}), 200
 
 
 @bp.route('/user/<int:user_id>', methods=['GET'])
@@ -168,10 +348,8 @@ def user_attendance(user_id):
 
     events = []
     for log in access_logs:
-    
         ts = log.timestamp
         if ts.tzinfo is None:
-            import pytz
             ts = pytz.utc.localize(ts)
         lima_ts = ts.astimezone(LIMA_TZ)
         schedule = get_user_schedule(user_id, lima_ts) if log.timestamp else None
@@ -212,172 +390,8 @@ def user_attendance(user_id):
     return jsonify(events_sorted), 200
 
 
-@bp.route('/summary', methods=['GET'])
-@jwt_required()
-def attendance_summary():
-    identity = get_jwt_identity()
-    caller = _get_user_from_identity(identity)
-    if not caller:
-        return jsonify({'msg': 'Usuario no autenticado'}), 401
-    if not caller.is_admin:
-        return jsonify({'msg': 'Solo admin'}, 403)
-
-    mode = request.args.get('mode', 'daily')
-    area = request.args.get('area')
-    user_id = request.args.get('user_id')
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
-
-    q = AccessLog.query.join(User_iot, AccessLog.user_id == User_iot.id)
-
-    if area:
-        q = q.filter(User_iot.area_trabajo == area)
-    if user_id:
-        q = q.filter(AccessLog.user_id == int(user_id))
-    if start_date:
-        q = q.filter(AccessLog.timestamp >= datetime.fromisoformat(start_date))
-    if end_date:
-        q = q.filter(AccessLog.timestamp <= datetime.fromisoformat(end_date) + timedelta(days=1))
-
-    if mode == 'daily':
-        group_by_expr = func.date(AccessLog.timestamp)
-    elif mode == 'weekly':
-        group_by_expr = func.strftime('%Y-%W', AccessLog.timestamp)
-    elif mode == 'monthly':
-        group_by_expr = func.strftime('%Y-%m', AccessLog.timestamp)
-    else:
-        return jsonify({'msg': 'mode inválido'}), 400
-
-    resumen = q.with_entities(
-        AccessLog.user_id,
-        group_by_expr.label('period'),
-        func.count(AccessLog.id).label('total')
-    ).group_by(AccessLog.user_id, 'period').all()
-
-    result = []
-    for user_id, period, total in resumen:
-        result.append({'user_id': user_id, 'period': str(period), 'total_registros': total})
-    return jsonify(result), 200
-
-
-@bp.route('/summary/export/csv', methods=['GET'])
-@jwt_required()
-def summary_export_csv():
-    identity = get_jwt_identity()
-    caller = _get_user_from_identity(identity)
-    if not caller:
-        return jsonify({'msg': 'Usuario no autenticado'}), 401
-    if not caller.is_admin:
-        return jsonify({'msg': 'Solo admin'}, 403)
-
-    mode = request.args.get('mode', 'daily')
-    area = request.args.get('area')
-    user_id = request.args.get('user_id')
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
-
-    q = AccessLog.query.join(User_iot, AccessLog.user_id == User_iot.id)
-    if area:
-        q = q.filter(User_iot.area_trabajo == area)
-    if user_id:
-        q = q.filter(AccessLog.user_id == int(user_id))
-    if start_date:
-        q = q.filter(AccessLog.timestamp >= datetime.fromisoformat(start_date))
-    if end_date:
-        q = q.filter(AccessLog.timestamp <= datetime.fromisoformat(end_date) + timedelta(days=1))
-
-    if mode == 'daily':
-        group_by_expr = func.date(AccessLog.timestamp)
-    elif mode == 'weekly':
-        group_by_expr = func.strftime('%Y-%W', AccessLog.timestamp)
-    elif mode == 'monthly':
-        group_by_expr = func.strftime('%Y-%m', AccessLog.timestamp)
-    else:
-        return jsonify({'msg': 'mode inválido'}), 400
-
-    resumen = q.with_entities(
-        AccessLog.user_id,
-        group_by_expr.label('period'),
-        func.count(AccessLog.id).label('total')
-    ).group_by(AccessLog.user_id, 'period').all()
-
-    si = StringIO()
-    cw = csv.writer(si)
-    cw.writerow(['user_id', 'period', 'total_registros'])
-    for user_id, period, total in resumen:
-        cw.writerow([user_id, period, total])
-    output = si.getvalue()
-    return Response(output, mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=attendance_summary.csv"})
-
-@bp.route('/admin/report', methods=['GET'])
-@jwt_required()
-def admin_attendance_report():
-
-    identity = get_jwt_identity()
-    caller = _get_user_from_identity(identity)
-    if not caller:
-        return jsonify({'msg': 'Usuario no autenticado'}), 401
-    if not caller.is_admin:
-        return jsonify({'msg': 'Solo administradores pueden ver este reporte'}), 403
-
-
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
-    user_id = request.args.get('user_id')
-    area = request.args.get('area')
-
- 
-    query = Attendance.query.join(User_iot, Attendance.user_id == User_iot.id)
-
-   
-    if start_date:
-        start_dt = datetime.fromisoformat(start_date)
-        query = query.filter(Attendance.entry_time >= start_dt)
-    
-    if end_date:
-        end_dt = datetime.fromisoformat(end_date) + timedelta(days=1)
-        query = query.filter(Attendance.entry_time <= end_dt)
-    
-    if user_id:
-        query = query.filter(Attendance.user_id == int(user_id))
-    
-    if area:
-        query = query.filter(User_iot.area_trabajo == area)
-
- 
-    attendances = query.order_by(Attendance.entry_time.desc()).all()
-
-    result = []
-    for att in attendances:
-        user = User_iot.query.get(att.user_id)
-        result.append({
-            'attendance_id': att.id,
-            'user_id': att.user_id,
-            'username': user.username if user else 'N/A',
-            'nombre': user.nombre if user else 'N/A',
-            'apellido': user.apellido if user else 'N/A',
-            'area_trabajo': user.area_trabajo if user else 'N/A',
-            'entry_time': att.entry_time.isoformat() if att.entry_time else None,
-            'exit_time': att.exit_time.isoformat() if att.exit_time else None,
-            'estado_entrada': att.estado_entrada,
-            'duracion_jornada': _calculate_work_duration(att.entry_time, att.exit_time),
-            'created_at': att.created_at.isoformat() if att.created_at else None
-        })
-
-    return jsonify({
-        'total_registros': len(result),
-        'filtros': {
-            'start_date': start_date,
-            'end_date': end_date,
-            'user_id': user_id,
-            'area': area
-        },
-        'asistencias': result
-    }), 200
-
 
 def _calculate_work_duration(entry_time, exit_time):
-
     if not entry_time or not exit_time:
         return None
     
