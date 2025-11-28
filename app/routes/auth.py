@@ -50,7 +50,7 @@ def login():
             "role": role_name,
             "nombre": user.nombre, 
             "apellido": user.apellido,
-            "area de trabajo": user.area_trabajo,    
+            "area_trabajo": user.area_trabajo  # <-- FIX
         }
 
         return jsonify(
