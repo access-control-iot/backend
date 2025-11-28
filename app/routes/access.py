@@ -293,3 +293,30 @@ def export_csv():
 def register_attendance_from_access(access_log):
     from app.routes.attendance import register_attendance_from_access as new_attendance_func
     return new_attendance_func(access_log)
+
+@bp.route('/setup', methods=['POST'])
+def setup_system():
+    if User_iot.query.first():
+        return jsonify({"msg": "System already setup"}), 400
+    
+ 
+    admin_role = Role(name="admin")
+    empleado_role = Role(name="empleado")
+    db.session.add_all([admin_role, empleado_role])
+    db.session.flush()
+    
+    admin = User_iot(
+        username="admin",
+        nombre="Administrador",
+        apellido="Sistema", 
+        role=admin_role
+    )
+    admin.set_password("admin123")
+    db.session.add(admin)
+    db.session.commit()
+    
+    return jsonify({
+        "msg": "System setup completed", 
+        "admin_id": admin.id,
+        "next_step": "Register admin fingerprint via /users/huella/register"
+    }), 201
