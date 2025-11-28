@@ -65,38 +65,58 @@ def assign_rfid():
     return jsonify(msg='RFID asignado/reasignado'), 200
 
 
-@bp.route('/setup', methods=['POST'])
-def setup_system():
-    if User_iot.query.first():
-        return jsonify({"msg": "System already setup"}), 400
-    
- 
-    admin_role = Role(name="admin")
-    empleado_role = Role(name="empleado")
-    db.session.add_all([admin_role, empleado_role])
-    db.session.flush()
-    
-    admin = User_iot(
-        username="admin",
-        nombre="Administrador",
-        apellido="Sistema", 
-        role=admin_role
-    )
-    admin.set_password("admin123")
-    db.session.add(admin)
-    db.session.commit()
-    
-    return jsonify({
-        "msg": "System setup completed", 
-        "admin_id": admin.id,
-        "next_step": "Register admin fingerprint via /users/huella/register"
-    }), 201
 
+
+@bp.route('/fingerprint-access', methods=['POST'])
+def fingerprint_access():
+
+    data = request.get_json() or {}
+    huella_id = data.get('huella_id')
+
+    if huella_id is None:
+        return jsonify(success=False, reason='Falta huella_id'), 400
+
+    user = User_iot.query.filter_by(huella_id=huella_id).first()
+    
+
+    if not user:
+        failed_count = _record_failed_attempt(
+            identifier=str(huella_id), 
+            identifier_type='huella', 
+            reason='Huella no registrada'
+        )
+        return jsonify({
+            "success": False,
+            "reason": "Acceso denegado - Huella no registrada",
+            "trigger_buzzer": (failed_count >= 3),
+            "failed_count": failed_count
+        }), 403
+
+
+    log = AccessLog(
+        user_id=user.id,
+        timestamp=datetime.utcnow(),
+        sensor_type='Huella',
+        status='Permitido',
+        huella_id=huella_id,
+        reason=None
+    )
+    db.session.add(log)
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "user_id": user.id,
+        "nombre": user.nombre,
+        "apellido": user.apellido,
+        "message": "Acceso permitido",
+        "trigger_buzzer": False
+    }), 200
 
 
 @bp.route('/rfid-access', methods=['POST'])
 def rfid_access():
-    
+
     data = request.get_json() or {}
     rfid = data.get('rfid')
     if not rfid:
@@ -104,20 +124,21 @@ def rfid_access():
 
     user = User_iot.query.filter_by(rfid=rfid).first()
     
-
-    if not user or not user.activo:
+    
+    if not user:
         failed_count = _record_failed_attempt(
             identifier=rfid, 
             identifier_type='rfid', 
-            reason='RFID no registrado o usuario inactivo'
+            reason='RFID no registrado'
         )
         return jsonify({
             "success": False,
-            "reason": "Acceso denegado",
+            "reason": "Acceso denegado - RFID no registrado",
             "trigger_buzzer": (failed_count >= 3),
             "failed_count": failed_count
         }), 403
 
+  
     log = AccessLog(
         user_id=user.id,
         timestamp=datetime.utcnow(),
