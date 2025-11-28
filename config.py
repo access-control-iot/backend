@@ -13,8 +13,14 @@ class Config:
     if database_url and database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
 
-  
-    SQLALCHEMY_DATABASE_URI = database_url + "?timezone=America/Lima"
+    SQLALCHEMY_DATABASE_URI = database_url
+    
+
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "connect_args": {
+            "options": "-c timezone=America/Lima"
+        }
+    }
     
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     DEBUG = os.environ.get('DEBUG', 'False') == 'True'
