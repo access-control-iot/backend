@@ -28,7 +28,7 @@ def create_app():
 
     app.register_blueprint(auth_bp)  
     app.register_blueprint(access_bp, url_prefix='/access')  
-    app.register_blueprint(attendance_bp)
+    app.register_blueprint(attendance_bp, url_prefix='/attendance')
     app.register_blueprint(user_bp, url_prefix='/users')
     app.register_blueprint(schedule_bp)
 
