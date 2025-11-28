@@ -131,21 +131,21 @@ def fingerprint_attendance():
         }), 403
 
     try:
-     
         lima_now = datetime.now(LIMA_TZ)
         
-
-        action = determine_attendance_action(user.id, lima_now)
-        
-
         schedule = get_user_schedule(user.id, lima_now)
-        schedule_status = check_schedule_status(schedule, lima_now) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
+        if not schedule:
+            return jsonify({
+                "success": False,
+                "reason": "Usuario no tiene horario asignado"
+            }), 403
+        
+        action = determine_attendance_action(user.id, lima_now)
+        schedule_status = check_schedule_status(schedule, lima_now)
 
         if action == 'entry':
-   
             return register_attendance_entry(user, lima_now, schedule_status)
         else:
-          
             return register_attendance_exit(user, lima_now)
 
     except Exception as e:
