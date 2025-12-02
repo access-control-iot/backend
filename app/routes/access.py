@@ -69,7 +69,6 @@ def assign_rfid():
 
 @bp.route('/fingerprint-access', methods=['POST'])
 def fingerprint_access():
-
     data = request.get_json() or {}
     huella_id = data.get('huella_id')
 
@@ -78,7 +77,6 @@ def fingerprint_access():
 
     user = User_iot.query.filter_by(huella_id=huella_id).first()
     
-
     if not user:
         failed_count = _record_failed_attempt(
             identifier=str(huella_id), 
@@ -93,14 +91,30 @@ def fingerprint_access():
         }), 403
 
 
+    last_access = AccessLog.query.filter(
+        AccessLog.user_id == user.id,
+        AccessLog.status == 'Permitido'
+    ).order_by(AccessLog.timestamp.desc()).first()
+    
+   
+    if not last_access or last_access.action_type == 'SALIDA':
+        action_type = 'ENTRADA'
+        message = "¡Bienvenido! Entrada permitida"
+    else:
+        action_type = 'SALIDA'
+        message = "¡Hasta pronto! Salida permitida"
+    
+
     log = AccessLog(
         user_id=user.id,
         timestamp=datetime.utcnow(),
         sensor_type='Huella',
         status='Permitido',
         huella_id=huella_id,
-        reason=None
+        reason=None,
+        action_type=action_type
     )
+    
     db.session.add(log)
     db.session.commit()
 
@@ -109,7 +123,8 @@ def fingerprint_access():
         "user_id": user.id,
         "nombre": user.nombre,
         "apellido": user.apellido,
-        "message": "Acceso permitido",
+        "message": message,
+        "action_type": action_type,
         "trigger_buzzer": False
     }), 200
 
