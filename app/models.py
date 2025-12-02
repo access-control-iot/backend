@@ -86,6 +86,7 @@ class AccessLog(db.Model):
     rfid = db.Column(db.String(64), nullable=True)
     huella_id = db.Column(db.Integer, nullable=True)
     reason = db.Column(db.String(255), nullable=True)
+    action_type = db.Column(db.String(20))
 
     user = db.relationship('User_iot', backref='access_logs')
 
