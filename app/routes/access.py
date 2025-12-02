@@ -85,26 +85,26 @@ def fingerprint_access():
         )
         return jsonify({
             "success": False,
-            "reason": "Acceso denegado - Huella no registrada",
+            "reason": "Huella no registrada",  
             "trigger_buzzer": (failed_count >= 3),
             "failed_count": failed_count
         }), 403
 
-
+    
     last_access = AccessLog.query.filter(
         AccessLog.user_id == user.id,
         AccessLog.status == 'Permitido'
     ).order_by(AccessLog.timestamp.desc()).first()
     
-   
+    
     if not last_access or last_access.action_type == 'SALIDA':
         action_type = 'ENTRADA'
-        message = "¡Bienvenido! Entrada permitida"
+        message = "Entrada permitida"
     else:
         action_type = 'SALIDA'
-        message = "¡Hasta pronto! Salida permitida"
+        message = "Salida permitida"
     
-
+    
     log = AccessLog(
         user_id=user.id,
         timestamp=datetime.utcnow(),
@@ -124,7 +124,7 @@ def fingerprint_access():
         "nombre": user.nombre,
         "apellido": user.apellido,
         "message": message,
-        "action_type": action_type,
+        "action_type": action_type,  
         "trigger_buzzer": False
     }), 200
 
