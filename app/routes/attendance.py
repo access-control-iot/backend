@@ -237,37 +237,6 @@ def register_attendance_exit(user, timestamp):
 
 
 
-@bp.route('/entry', methods=['POST'])
-@jwt_required()
-def manual_entry():
- 
-    identity = get_jwt_identity()
-    user = _get_user_from_identity(identity)
-    
-    if not user:
-        return jsonify({'success': False, 'reason': 'Usuario no autenticado'}), 401
-
-    lima_now = datetime.now(LIMA_TZ)
-    schedule = get_user_schedule(user.id, lima_now)
-    schedule_status = check_schedule_status(schedule, lima_now) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
-    
-    return register_attendance_entry(user, lima_now, schedule_status)
-
-
-@bp.route('/exit', methods=['POST'])
-@jwt_required()
-def manual_exit():
-
-    identity = get_jwt_identity()
-    user = _get_user_from_identity(identity)
-    
-    if not user:
-        return jsonify({'success': False, 'reason': 'Usuario no autenticado'}), 401
-
-    lima_now = datetime.now(LIMA_TZ)
-    return register_attendance_exit(user, lima_now)
-
-
 
 def register_attendance_from_access(access_log: AccessLog):
  
