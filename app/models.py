@@ -39,7 +39,7 @@ class User_iot(db.Model):
     area_trabajo = db.Column(db.String(80), index=True)
     huella_id = db.Column(db.Integer, db.ForeignKey('huella.id', ondelete='SET NULL'), unique=True, nullable=True, index=True)
     huella = db.relationship('Huella', backref='user', uselist=False, passive_deletes=True)
-    is_inside = db.Column(db.Boolean, default=False) 
+
 
     rfid = db.Column(db.String(64), unique=True, index=True)
 
