@@ -3,7 +3,7 @@ from flask_jwt_extended import get_jwt, jwt_required, get_jwt_identity
 from datetime import datetime
 from functools import wraps
 import base64
-
+from flask_cors import cross_origin
 from ..models import User_iot, Role, Huella
 
 from app import db
@@ -404,45 +404,59 @@ def list_empleados():
         "users": users_data,
         "total": len(users_data)
     }), 200
-@user_bp.route("/huella/assign-id", methods=["POST"])
+@user_bp.route("/huella/assign-manual", methods=["POST"])
 @jwt_required()
 @admin_required
-def assign_fingerprint_id():
+@cross_origin()
+def assign_huella_manual():
     data = request.get_json() or {}
     
     user_id = data.get("user_id")
-    if not user_id:
-        return jsonify(success=False, message="user_id es requerido"), 400
+    huella_id = data.get("huella_id")
+    
+    if not user_id or not huella_id:
+        return jsonify(success=False, message="user_id y huella_id son requeridos"), 400
     
     try:
         user_id = int(user_id)
-    except:
-        return jsonify(success=False, message="user_id debe ser número entero"), 400
+        huella_id = int(huella_id)
+    except ValueError:
+        return jsonify(success=False, message="IDs deben ser números enteros"), 400
     
 
+    if huella_id <= 0:
+        return jsonify(success=False, message="huella_id debe ser mayor a 0"), 400
+    
     user = User_iot.query.get(user_id)
     if not user:
         return jsonify(success=False, message="Usuario no encontrado"), 404
     
 
-    last_huella = Huella.query.order_by(Huella.id.desc()).first()
-    next_id = (last_huella.id + 1) if last_huella else 1
+    existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
+    if existing_user and existing_user.id != user_id:
+        return jsonify(success=False, message="Huella ID ya está asignado a otro usuario"), 400
     
+    try:
    
-    existing_user = User_iot.query.filter_by(huella_id=next_id).first()
-    if existing_user:
-      
-        next_id += 1
-        while User_iot.query.filter_by(huella_id=next_id).first():
-            next_id += 1
+        user.huella_id = huella_id
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "ID de huella asignado manualmente",
+            "huella_id": huella_id,
+            "user_id": user_id,
+            "username": user.username,
+            "nombre": user.nombre
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": f"Error al asignar huella: {str(e)}"
+        }), 500
     
-    return jsonify({
-        "success": True,
-        "huella_id": next_id,
-        "user_id": user_id,
-        "message": "ID de huella asignado correctamente"
-    }), 200
-
 @user_bp.route("/huella/assign-manual", methods=["POST"])
 @jwt_required()
 @admin_required
