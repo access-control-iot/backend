@@ -131,14 +131,12 @@ def fingerprint_access():
 
 @bp.route('/rfid-access', methods=['POST'])
 def rfid_access():
-
     data = request.get_json() or {}
     rfid = data.get('rfid')
     if not rfid:
         return jsonify(success=False, reason='No se envió RFID'), 400
 
     user = User_iot.query.filter_by(rfid=rfid).first()
-    
     
     if not user:
         failed_count = _record_failed_attempt(
@@ -153,14 +151,30 @@ def rfid_access():
             "failed_count": failed_count
         }), 403
 
-  
+
+    last_access = AccessLog.query.filter(
+        AccessLog.user_id == user.id,
+        AccessLog.status == 'Permitido',
+        AccessLog.sensor_type == 'RFID' 
+    ).order_by(AccessLog.timestamp.desc()).first()
+    
+
+    if not last_access or last_access.action_type == 'SALIDA':
+        action_type = 'ENTRADA'
+        message = "Entrada permitida por RFID"
+    else:
+        action_type = 'SALIDA'
+        message = "Salida permitida por RFID"
+
+
     log = AccessLog(
         user_id=user.id,
         timestamp=datetime.utcnow(),
         sensor_type='RFID',
         status='Permitido',
         rfid=rfid,
-        reason=None
+        reason=None,
+        action_type=action_type 
     )
     db.session.add(log)
     db.session.commit()
@@ -170,10 +184,24 @@ def rfid_access():
         "user_id": user.id,
         "nombre": user.nombre,
         "apellido": user.apellido,
-        "message": "Acceso permitido",
+        "message": message,
+        "action_type": action_type,  
         "trigger_buzzer": False
     }), 200
 
+def determinar_accion_usuario(user_id, sensor_type='Huella'):
+ 
+    last_access = AccessLog.query.filter(
+        AccessLog.user_id == user_id,
+        AccessLog.status == 'Permitido',
+        AccessLog.sensor_type == sensor_type
+    ).order_by(AccessLog.timestamp.desc()).first()
+    
+    if not last_access or last_access.action_type == 'SALIDA':
+        return 'ENTRADA'
+    else:
+        return 'SALIDA'
+    
 @bp.route('/secure-zone', methods=['POST'])
 def secure_zone_access():
 
@@ -335,3 +363,206 @@ def setup_system():
         "admin_id": admin.id,
         "next_step": "Register admin fingerprint via /users/huella/register"
     }), 201
+
+def decidir_accion_automatica(user, timestamp):
+    
+    if user.role.name == "admin":
+        return {
+            'tipo': 'ACCESO',
+            'registrar_asistencia': False,
+            'razon': 'Usuario administrador'
+        }
+    
+    
+    schedule = get_user_schedule(user.id, timestamp)
+    
+  
+    if not schedule:
+        return {
+            'tipo': 'ACCESO',
+            'registrar_asistencia': False,
+            'razon': 'Usuario sin horario asignado'
+        }
+    
+    
+    dias = [d.strip() for d in schedule.dias.split(',')]
+    dia_text = ['Lun','Mar','Mie','Jue','Vie','Sab','Dom'][timestamp.weekday()]
+    
+    if dia_text not in dias:
+        return {
+            'tipo': 'ACCESO',
+            'registrar_asistencia': False,
+            'razon': 'Fuera de día laboral'
+        }
+    
+    
+    hora_entrada = schedule.hora_entrada
+    hora_salida = schedule.hora_salida
+    tolerancia = schedule.tolerancia_entrada or 0
+    
+    
+    inicio_jornada = datetime.combine(timestamp.date(), hora_entrada)
+    fin_jornada = datetime.combine(timestamp.date(), hora_salida)
+    
+    inicio_jornada = LIMA_TZ.localize(inicio_jornada)
+    fin_jornada = LIMA_TZ.localize(fin_jornada)
+    
+    
+    ventana_inicio = inicio_jornada - timedelta(minutes=10)
+    ventana_fin = fin_jornada + timedelta(minutes=(schedule.tolerancia_salida or 0))
+    
+    
+    if ventana_inicio <= timestamp <= ventana_fin:
+    
+        return {
+            'tipo': 'ACCESO_Y_ASISTENCIA',
+            'registrar_asistencia': True,
+            'razon': 'Dentro de horario laboral',
+            'ventana_inicio': ventana_inicio,
+            'ventana_fin': ventana_fin
+        }
+    else:
+       
+        return {
+            'tipo': 'ACCESO',
+            'registrar_asistencia': False,
+            'razon': 'Fuera de horario laboral',
+            'ventana_inicio': ventana_inicio,
+            'ventana_fin': ventana_fin
+        }
+
+@bp.route('/auto-access', methods=['POST'])
+def auto_access():
+   
+    data = request.get_json() or {}
+    huella_id = data.get('huella_id')
+    rfid = data.get('rfid')
+    
+   
+    es_zona_segura = (huella_id is not None and rfid is not None)
+    
+    if es_zona_segura:
+   
+        user = User_iot.query.filter_by(huella_id=huella_id).first()
+        
+        if not user or user.role.name != "admin":
+            return jsonify({
+                "success": False,
+                "reason": "Acceso denegado - Zona solo para administradores",
+                "tipo": "ZONA_SEGURA_DENEGADA"
+            }), 403
+        
+        if user.rfid != rfid:
+            return jsonify({
+                "success": False,
+                "reason": "RFID no coincide",
+                "tipo": "ZONA_SEGURA_DENEGADA"
+            }), 403
+        
+    
+        log = AccessLog(
+            user_id=user.id,
+            timestamp=datetime.utcnow(),
+            sensor_type="ZonaSegura",
+            status="Permitido",
+            huella_id=huella_id,
+            rfid=rfid,
+            action_type="ACCESO_ZONA_SEGURA"
+        )
+        db.session.add(log)
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "tipo": "ZONA_SEGURA",
+            "message": "Acceso a zona segura permitido",
+            "user_id": user.id,
+            "nombre": user.nombre,
+            "action_type": "ACCESO_ZONA_SEGURA",
+            "registrar_asistencia": False
+        }), 200
+    
+   
+    if huella_id:
+        user = User_iot.query.filter_by(huella_id=huella_id).first()
+        sensor_type = 'Huella'
+        identifier = str(huella_id)
+    elif rfid:
+        user = User_iot.query.filter_by(rfid=rfid).first()
+        sensor_type = 'RFID'
+        identifier = rfid
+    else:
+        return jsonify(success=False, reason='Falta huella_id o rfid'), 400
+    
+
+    if not user:
+        failed_count = _record_failed_attempt(
+            identifier=identifier,
+            identifier_type='huella' if huella_id else 'rfid',
+            reason=f'{sensor_type} no registrado'
+        )
+        return jsonify({
+            "success": False,
+            "reason": f"Acceso denegado - {sensor_type} no registrado",
+            "trigger_buzzer": (failed_count >= 3),
+            "failed_count": failed_count,
+            "tipo": "ACCESO_DENEGADO"
+        }), 403
+    
+    timestamp = datetime.utcnow()
+    lima_timestamp = timestamp.astimezone(LIMA_TZ)
+
+    last_access = AccessLog.query.filter(
+        AccessLog.user_id == user.id,
+        AccessLog.status == 'Permitido'
+    ).order_by(AccessLog.timestamp.desc()).first()
+    
+    if not last_access or last_access.action_type in [None, 'SALIDA', 'ACCESO_SALIDA']:
+        access_action = 'ENTRADA'
+    else:
+        access_action = 'SALIDA'
+    
+ 
+    decision = decidir_accion_automatica(user, lima_timestamp)
+
+    log = AccessLog(
+        user_id=user.id,
+        timestamp=timestamp,
+        sensor_type=sensor_type,
+        status='Permitido',
+        huella_id=huella_id if huella_id else None,
+        rfid=rfid if rfid else None,
+        action_type=f"{access_action}_{decision['tipo']}",
+        motivo_decision=decision['razon']
+    )
+    db.session.add(log)
+    
+
+    attendance_data = None
+    if decision['registrar_asistencia']:
+        attendance_data = register_attendance_from_access(log)
+    
+    db.session.commit()
+    
+
+    response = {
+        "success": True,
+        "tipo": decision['tipo'],
+        "user_id": user.id,
+        "nombre": user.nombre,
+        "apellido": user.apellido,
+        "access_action": access_action,
+        "message": f"{access_action} permitida - {decision['razon']}",
+        "registrar_asistencia": decision['registrar_asistencia'],
+        "decision_razon": decision['razon']
+    }
+    
+
+    if attendance_data and attendance_data.get('ok'):
+        response['asistencia_registrada'] = True
+        response['asistencia_action'] = attendance_data.get('action')
+        response['estado_entrada'] = attendance_data.get('estado', 
+                                                       attendance_data.get('schedule', {}).get('state'))
+        response['minutes_diff'] = attendance_data.get('schedule', {}).get('minutes_diff')
+    
+    return jsonify(response), 200
