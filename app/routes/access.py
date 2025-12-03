@@ -450,11 +450,11 @@ def auto_access():
     huella_id = data.get('huella_id')
     rfid = data.get('rfid')
     
-  
+    
     es_zona_segura = (huella_id is not None and rfid is not None)
     
     if es_zona_segura:
-    
+        
         user = User_iot.query.filter_by(huella_id=huella_id).first()
         
         if not user or user.role.name != "admin":
@@ -471,7 +471,7 @@ def auto_access():
                 "tipo": "ZONA_SEGURA_DENEGADA"
             }), 403
         
-       
+        
         log = AccessLog(
             user_id=user.id,
             timestamp=datetime.utcnow(),
@@ -494,7 +494,7 @@ def auto_access():
             "registrar_asistencia": False
         }), 200
     
-
+    
     if huella_id:
         user = User_iot.query.filter_by(huella_id=huella_id).first()
         sensor_type = 'Huella'
@@ -526,37 +526,58 @@ def auto_access():
     
     last_access = AccessLog.query.filter(
         AccessLog.user_id == user.id,
-        AccessLog.status == 'Permitido'
+        AccessLog.status == 'Permitido',
+        AccessLog.sensor_type.in_(['Huella', 'RFID'])  
     ).order_by(AccessLog.timestamp.desc()).first()
     
-    if not last_access or last_access.action_type in [None, 'SALIDA', 'ACCESO_SALIDA']:
+    
+    if not last_access:
+        
         access_action = 'ENTRADA'
     else:
-        access_action = 'SALIDA'
+        
+        if last_access.action_type:
+            
+            if 'ENTRADA' in last_access.action_type:
+                access_action = 'SALIDA'  
+            elif 'SALIDA' in last_access.action_type:
+                access_action = 'ENTRADA'  
+            else:
+                
+                access_action = 'SALIDA' if last_access.action_type == 'ENTRADA' else 'ENTRADA'
+        else:
+            
+            access_action = 'SALIDA' if last_access.action_type == 'ENTRADA' else 'ENTRADA'
     
-
     decision = decidir_accion_automatica(user, lima_timestamp)
     
- 
-    if access_action == 'SALIDA':
-      
-        hoy = lima_timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
-        mañana = hoy + timedelta(days=1)
-        
-        asistencia_abierta = Attendance.query.filter(
-            Attendance.user_id == user.id,
-            Attendance.entry_time >= hoy,
-            Attendance.entry_time < mañana,
-            Attendance.exit_time.is_(None)
-        ).first()
-        
-        if asistencia_abierta:
-            # Forzar registro de asistencia (salida)
-            decision['registrar_asistencia'] = True
-            decision['tipo'] = 'ACCESO_Y_ASISTENCIA'
-            decision['razon'] = 'Cierre de jornada laboral'
+    
+    hoy = lima_timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+    mañana = hoy + timedelta(days=1)
+    
+    asistencia_abierta = Attendance.query.filter(
+        Attendance.user_id == user.id,
+        Attendance.entry_time >= hoy,
+        Attendance.entry_time < mañana,
+        Attendance.exit_time.is_(None)
+    ).first()
     
  
+    if access_action == 'SALIDA' and asistencia_abierta:
+        
+        decision['registrar_asistencia'] = True
+        decision['tipo'] = 'ACCESO_Y_ASISTENCIA'
+        decision['razon'] = 'Cierre de jornada laboral'
+        print(f"DEBUG: Usuario {user.id} tiene asistencia abierta, forzando cierre")
+    
+    
+    if access_action == 'ENTRADA' and asistencia_abierta:
+        
+        decision['registrar_asistencia'] = False
+        decision['tipo'] = 'ACCESO'
+        decision['razon'] = 'Ya tiene asistencia registrada hoy'
+        print(f"DEBUG: Usuario {user.id} ya tiene asistencia abierta, no registrar nueva entrada")
+    
     log = AccessLog(
         user_id=user.id,
         timestamp=timestamp,
@@ -569,14 +590,17 @@ def auto_access():
     )
     db.session.add(log)
     
-   
+ 
     attendance_data = None
     if decision['registrar_asistencia']:
+        print(f"DEBUG: Registrando asistencia para usuario {user.id}, acción: {access_action}")
         attendance_data = register_attendance_from_access(log)
+        if attendance_data:
+            print(f"DEBUG: Resultado asistencia: {attendance_data}")
     
     db.session.commit()
     
-    
+   
     response = {
         "success": True,
         "tipo": decision['tipo'],
@@ -587,19 +611,24 @@ def auto_access():
         "message": f"{access_action} permitida - {decision['razon']}",
         "registrar_asistencia": decision['registrar_asistencia'],
         "decision_razon": decision['razon'],
-        "hora_actual": lima_timestamp.strftime('%H:%M')
+        "hora_actual": lima_timestamp.strftime('%H:%M'),
+        "ultimo_acceso": last_access.timestamp.isoformat() if last_access else None,
+        "ultima_accion": last_access.action_type if last_access else None,
+        "asistencia_abierta": bool(asistencia_abierta)
     }
     
-
+  
     schedule = get_user_schedule(user.id, lima_timestamp)
     if schedule:
         response.update({
             "hora_entrada": schedule.hora_entrada.strftime('%H:%M'),
             "hora_salida": schedule.hora_salida.strftime('%H:%M'),
-            "dias_laborales": schedule.dias
+            "dias_laborales": schedule.dias,
+            "tolerancia_entrada": schedule.tolerancia_entrada,
+            "tolerancia_salida": schedule.tolerancia_salida
         })
     
-
+    
     if attendance_data and attendance_data.get('ok'):
         response['asistencia_registrada'] = True
         response['asistencia_action'] = attendance_data.get('action')
@@ -609,5 +638,7 @@ def auto_access():
             response['minutes_diff'] = attendance_data.get('schedule', {}).get('minutes_diff')
         else:
             response['estado_entrada'] = 'salida_registrada'
+            response['duracion_jornada'] = attendance_data.get('duracion_jornada')
     
+    print(f"DEBUG: Respuesta final: {response}")
     return jsonify(response), 200
