@@ -386,3 +386,104 @@ def assign_fingerprint_id():
         "user_id": user_id,
         "message": "ID de huella asignado correctamente"
     }), 200
+
+@user_bp.route("/huella/assign-manual", methods=["POST"])
+@jwt_required()
+@admin_required
+def assign_huella_manual():
+    data = request.get_json() or {}
+    
+    user_id = data.get("user_id")
+    huella_id = data.get("huella_id")
+    
+    if not user_id or not huella_id:
+        return jsonify(success=False, message="user_id y huella_id son requeridos"), 400
+    
+    try:
+        user_id = int(user_id)
+        huella_id = int(huella_id)
+    except:
+        return jsonify(success=False, message="IDs deben ser números enteros"), 400
+    
+    user = User_iot.query.get(user_id)
+    if not user:
+        return jsonify(success=False, message="Usuario no encontrado"), 404
+    
+    existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
+    if existing_user and existing_user.id != user_id:
+        return jsonify(success=False, message="Huella ID ya está asignado a otro usuario"), 400
+
+    user.huella_id = huella_id
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": "ID de huella asignado manualmente",
+        "huella_id": huella_id,
+        "user_id": user_id,
+        "username": user.username,
+        "nombre": user.nombre
+    }), 200
+
+
+@user_bp.route("/huella/verify-setup", methods=["POST"])
+def verify_fingerprint_setup():
+    data = request.get_json() or {}
+    
+    huella_id = data.get("huella_id")
+    user_id = data.get("user_id")
+    
+    if not huella_id or not user_id:
+        return jsonify(success=False, message="huella_id y user_id son requeridos"), 400
+    
+    try:
+        huella_id = int(huella_id)
+        user_id = int(user_id)
+    except:
+        return jsonify(success=False, message="IDs deben ser números enteros"), 400
+    user = User_iot.query.get(user_id)
+    if not user:
+        return jsonify(success=False, message="Usuario no encontrado"), 404
+
+    if user.huella_id != huella_id:
+        return jsonify(success=False, message="ID de huella no coincide con usuario"), 400
+    huella_record = Huella.query.get(huella_id)
+    has_template = bool(huella_record and huella_record.template and len(huella_record.template) > 0)
+    
+    return jsonify({
+        "success": True,
+        "user_id": user_id,
+        "huella_id": huella_id,
+        "has_template": has_template,
+        "message": "Huella registrada en sistema" if has_template else "Huella asignada pero sin template"
+    }), 200
+
+
+@user_bp.route("/rfid/verify", methods=["POST"])
+def verify_rfid():
+    data = request.get_json() or {}
+    
+    rfid = data.get("rfid")
+    
+    if not rfid:
+        return jsonify(success=False, message="RFID requerido"), 400
+
+    user = User_iot.query.filter_by(rfid=rfid).first()
+    
+    if user:
+        return jsonify({
+            "success": False,
+            "message": f"RFID ya asignado a {user.nombre} {user.apellido}",
+            "assigned_to": {
+                "id": user.id,
+                "nombre": user.nombre,
+                "apellido": user.apellido,
+                "username": user.username
+            }
+        }), 200
+    else:
+        return jsonify({
+            "success": True,
+            "message": "RFID disponible",
+            "available": True
+        }), 200

@@ -23,7 +23,8 @@ def create_app():
     from app.routes.access import bp as access_bp
     from app.routes.attendance import bp as attendance_bp
     from app.routes.user import user_bp
-    from app.routes.schedule import schedule_bp   
+    from app.routes.schedule import schedule_bp 
+    from app.routes.esp32 import esp32_bp  
 
 
     app.register_blueprint(auth_bp)  
@@ -31,6 +32,7 @@ def create_app():
     app.register_blueprint(attendance_bp, url_prefix='/attendance')
     app.register_blueprint(user_bp, url_prefix='/users')
     app.register_blueprint(schedule_bp)
+    app.register_blueprint(esp32_bp)
 
 
     print("\n=== ROUTES LOADED ===")
