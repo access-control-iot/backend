@@ -365,7 +365,7 @@ def setup_system():
     }), 201
 
 def decidir_accion_automatica(user, timestamp):
-
+    
     if user.role.name == "admin":
         return {
             'tipo': 'ACCESO',
@@ -373,10 +373,10 @@ def decidir_accion_automatica(user, timestamp):
             'razon': 'Usuario administrador'
         }
     
-
+    
     schedule = get_user_schedule(user.id, timestamp)
     
-
+    
     if not schedule:
         return {
             'tipo': 'ACCESO',
@@ -384,7 +384,7 @@ def decidir_accion_automatica(user, timestamp):
             'razon': 'Usuario sin horario asignado'
         }
     
-  
+    
     dias = [d.strip() for d in schedule.dias.split(',')]
     dia_text = ['Lun','Mar','Mie','Jue','Vie','Sab','Dom'][timestamp.weekday()]
     
@@ -401,20 +401,30 @@ def decidir_accion_automatica(user, timestamp):
     tolerancia_entrada = schedule.tolerancia_entrada or 0
     tolerancia_salida = schedule.tolerancia_salida or 0
     
-   
+    
     inicio_jornada = datetime.combine(timestamp.date(), hora_entrada)
     fin_jornada = datetime.combine(timestamp.date(), hora_salida)
     
     inicio_jornada = LIMA_TZ.localize(inicio_jornada)
     fin_jornada = LIMA_TZ.localize(fin_jornada)
     
-
+    
     ventana_inicio = inicio_jornada - timedelta(minutes=10)
     ventana_fin = fin_jornada + timedelta(minutes=tolerancia_salida)
     
-
+   
+    print(f"DEBUG Horario usuario {user.id}:")
+    print(f"  Hora entrada: {hora_entrada}")
+    print(f"  Hora salida: {hora_salida}")
+    print(f"  Tolerancia entrada: {tolerancia_entrada}")
+    print(f"  Tolerancia salida: {tolerancia_salida}")
+    print(f"  Ventana: {ventana_inicio.strftime('%H:%M')} - {ventana_fin.strftime('%H:%M')}")
+    print(f"  Hora actual: {timestamp.strftime('%H:%M')}")
+    print(f"  Dentro de ventana: {ventana_inicio <= timestamp <= ventana_fin}")
+    
+    #
     if ventana_inicio <= timestamp <= ventana_fin:
-     
+       
         return {
             'tipo': 'ACCESO_Y_ASISTENCIA',
             'registrar_asistencia': True,
@@ -423,7 +433,7 @@ def decidir_accion_automatica(user, timestamp):
             'hora_salida_real': hora_salida.strftime('%H:%M')
         }
     else:
-      
+        
         return {
             'tipo': 'ACCESO',
             'registrar_asistencia': False,
@@ -444,6 +454,24 @@ def get_user_schedule(user_id, dt):
     if not us:
         return None
     return Schedule.query.get(us.schedule_id)
+def determinar_accion_acceso(user_id):
+    last_access = AccessLog.query.filter(
+        AccessLog.user_id == user_id,
+        AccessLog.status == 'Permitido',
+        AccessLog.sensor_type.in_(['Huella', 'RFID'])
+    ).order_by(AccessLog.timestamp.desc()).first()
+    
+    if not last_access:
+        return 'ENTRADA'  
+    if last_access.action_type:
+        if 'ENTRADA' in last_access.action_type:
+            return 'SALIDA'
+        elif 'SALIDA' in last_access.action_type:
+            return 'ENTRADA'
+    
+   
+    total_accesos = AccessLog.query.filter_by(user_id=user_id, status='Permitido').count()
+    return 'SALIDA' if total_accesos % 2 == 1 else 'ENTRADA'
 @bp.route('/auto-access', methods=['POST'])
 def auto_access():
     data = request.get_json() or {}
