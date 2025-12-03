@@ -18,7 +18,7 @@ def create_app():
     migrate.init_app(app, db)
 
 
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    CORS(app, supports_credentials=True)
     from app.routes.auth import bp as auth_bp
     from app.routes.access import bp as access_bp
     from app.routes.attendance import bp as attendance_bp
