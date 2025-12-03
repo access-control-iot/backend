@@ -457,45 +457,6 @@ def assign_huella_manual():
             "message": f"Error al asignar huella: {str(e)}"
         }), 500
     
-@user_bp.route("/huella/assign-manual", methods=["POST"])
-@jwt_required()
-@admin_required
-def assign_huella_manual():
-    data = request.get_json() or {}
-    
-    user_id = data.get("user_id")
-    huella_id = data.get("huella_id")
-    
-    if not user_id or not huella_id:
-        return jsonify(success=False, message="user_id y huella_id son requeridos"), 400
-    
-    try:
-        user_id = int(user_id)
-        huella_id = int(huella_id)
-    except:
-        return jsonify(success=False, message="IDs deben ser números enteros"), 400
-    
-    user = User_iot.query.get(user_id)
-    if not user:
-        return jsonify(success=False, message="Usuario no encontrado"), 404
-    
-    existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
-    if existing_user and existing_user.id != user_id:
-        return jsonify(success=False, message="Huella ID ya está asignado a otro usuario"), 400
-
-    user.huella_id = huella_id
-    db.session.commit()
-    
-    return jsonify({
-        "success": True,
-        "message": "ID de huella asignado manualmente",
-        "huella_id": huella_id,
-        "user_id": user_id,
-        "username": user.username,
-        "nombre": user.nombre
-    }), 200
-
-
 @user_bp.route("/huella/verify-setup", methods=["POST"])
 def verify_fingerprint_setup():
     data = request.get_json() or {}
