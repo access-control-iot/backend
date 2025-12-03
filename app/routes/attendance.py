@@ -110,11 +110,11 @@ def determine_attendance_action(user_id, current_time):
 
 
 def register_attendance_entry(user, timestamp, schedule_status):
-    """Registra la entrada de asistencia de un usuario"""
+   
     today_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
     
-    # Verificar si ya tiene una entrada registrada hoy
+
     existing_entry = Attendance.query.filter(
         Attendance.user_id == user.id,
         Attendance.entry_time >= today_start,
@@ -127,7 +127,7 @@ def register_attendance_entry(user, timestamp, schedule_status):
             "reason": "Ya tiene una entrada registrada hoy"
         }), 400
     
-    # Crear nueva asistencia
+
     attendance = Attendance(
         user_id=user.id,
         entry_time=timestamp,
@@ -151,7 +151,7 @@ def register_attendance_entry(user, timestamp, schedule_status):
 
 
 def register_attendance_exit(user, timestamp):
-    """Registra la salida de asistencia de un usuario"""
+   
     today_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
     
@@ -189,10 +189,7 @@ def register_attendance_exit(user, timestamp):
 
 
 def register_attendance_from_access(access_log: AccessLog):
-    """
-    Registra asistencia basada en un log de acceso
-    Maneja automáticamente entrada/salida
-    """
+   
     if not access_log or not access_log.user_id:
         return {'ok': False, 'reason': 'Datos insuficientes'}
 
@@ -203,7 +200,7 @@ def register_attendance_from_access(access_log: AccessLog):
 
     user_id = access_log.user_id
     
-    # Determinar si es entrada o salida basado en asistencia existente
+    
     hoy = lima_dt.replace(hour=0, minute=0, second=0, microsecond=0)
     mañana = hoy + timedelta(days=1)
     
@@ -215,16 +212,16 @@ def register_attendance_from_access(access_log: AccessLog):
         Attendance.exit_time.is_(None)
     ).first()
     
-    # Obtener horario del usuario
+  
     schedule = get_user_schedule(user_id, lima_dt)
     schedule_info = check_schedule_status(schedule, lima_dt) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
     
     if open_att:
-        # Ya tiene entrada -> esto es una SALIDA de asistencia
+        
         open_att.exit_time = access_log.timestamp
         db.session.commit()
         
-        # Calcular duración de la jornada
+       
         duracion = open_att.exit_time - open_att.entry_time
         horas = int(duracion.total_seconds() // 3600)
         minutos = int((duracion.total_seconds() % 3600) // 60)
@@ -240,7 +237,7 @@ def register_attendance_from_access(access_log: AccessLog):
             'exit_time': access_log.timestamp
         }
     else:
-        # No tiene entrada -> esto es una ENTRADA de asistencia
+        
         estado = schedule_info.get('state') or 'sin_horario'
         att = Attendance(
             user_id=user_id, 
