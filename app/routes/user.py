@@ -404,6 +404,53 @@ def list_empleados():
         "users": users_data,
         "total": len(users_data)
     }), 200
+
+@user_bp.route("/huella/assign-id", methods=["POST"])
+@jwt_required()
+def assign_huella_id():
+    """Asigna un ID de huella disponible a un usuario"""
+    data = request.get_json() or {}
+    
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        return jsonify(success=False, message="user_id es requerido"), 400
+    
+    try:
+        user_id = int(user_id)
+    except:
+        return jsonify(success=False, message="user_id debe ser número entero"), 400
+    
+    # Verificar que el usuario existe
+    user = User_iot.query.get(user_id)
+    if not user:
+        return jsonify(success=False, message="Usuario no encontrado"), 404
+    
+    # Verificar si ya tiene huella asignada
+    if user.huella_id:
+        return jsonify({
+            "success": False,
+            "message": "Usuario ya tiene huella asignada",
+            "huella_id": user.huella_id
+        }), 400
+    
+    # Obtener el siguiente ID disponible
+    last_huella = Huella.query.order_by(Huella.id.desc()).first()
+    next_id = (last_huella.id + 1) if last_huella else 1
+    
+    # Verificar que no esté en uso
+    while True:
+        huella_existente = Huella.query.get(next_id)
+        if not huella_existente:
+            break
+        next_id += 1
+    
+    return jsonify({
+        "success": True,
+        "message": "ID de huella asignado",
+        "huella_id": next_id,
+        "user_id": user_id
+    }), 200
 @user_bp.route("/huella/assign-manual", methods=["POST"])
 @jwt_required()
 @admin_required
