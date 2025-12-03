@@ -430,7 +430,18 @@ def decidir_accion_automatica(user, timestamp):
             'ventana_inicio': ventana_inicio,
             'ventana_fin': ventana_fin
         }
-
+def get_user_schedule(user_id, dt):
+    
+    from app.models import UserSchedule, Schedule
+    local_date = dt.astimezone(LIMA_TZ).date() if dt.tzinfo else dt.date()
+    us = UserSchedule.query.filter(
+        UserSchedule.user_id == user_id,
+        UserSchedule.start_date <= local_date,
+        (UserSchedule.end_date == None) | (UserSchedule.end_date >= local_date)
+    ).first()
+    if not us:
+        return None
+    return Schedule.query.get(us.schedule_id)
 @bp.route('/auto-access', methods=['POST'])
 def auto_access():
    
