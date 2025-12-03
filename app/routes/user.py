@@ -228,17 +228,73 @@ def register_huella():
 
     return jsonify(msg="Huella guardada correctamente", huella_id=huella_id), 201
 
-@user_bp.route("/huella/all", methods=["GET"])
-def get_all_huellas():
-    huellas = Huella.query.all()
+@user_bp.route("/huella/sync-all", methods=["GET"])
+def sync_all_fingerprints():
 
-    return jsonify([
-        {
-            "huella_id": h.id,
-            "template": base64.b64encode(h.template).decode()
-        }
-        for h in huellas
-    ]), 200
+    try:
+ 
+        huellas_data = db.session.query(
+            Huella.id,
+            Huella.template,
+            User_iot.id.label("user_id"),
+            User_iot.nombre,
+            User_iot.apellido
+        ).join(
+            User_iot, User_iot.huella_id == Huella.id
+        ).filter(
+            User_iot.huella_id.isnot(None)
+        ).all()
+        
+        huellas_list = []
+        for h in huellas_data:
+            if h.template and len(h.template) > 0:
+                huellas_list.append({
+                    "huella_id": h.id,
+                    "user_id": h.user_id,
+                    "nombre": h.nombre,
+                    "apellido": h.apellido,
+                    "template": base64.b64encode(h.template).decode() if h.template else None
+                })
+        
+        return jsonify({
+            "success": True,
+            "huellas": huellas_list,
+            "total": len(huellas_list),
+            "message": f"Se encontraron {len(huellas_list)} huellas registradas"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error al obtener huellas: {str(e)}"
+        }), 500
+
+
+@user_bp.route("/huella/check/<int:huella_id>", methods=["GET"])
+def check_fingerprint(huella_id):
+
+    huella = Huella.query.get(huella_id)
+    
+    if not huella:
+        return jsonify({
+            "success": False,
+            "exists": False,
+            "message": f"Huella ID {huella_id} no encontrada en base de datos"
+        }), 404
+    
+    user = User_iot.query.filter_by(huella_id=huella_id).first()
+    
+    return jsonify({
+        "success": True,
+        "exists": True,
+        "huella_id": huella_id,
+        "has_template": bool(huella.template and len(huella.template) > 0),
+        "assigned_to": {
+            "user_id": user.id if user else None,
+            "nombre": user.nombre if user else None,
+            "apellido": user.apellido if user else None
+        } if user else None
+    }), 200
 
 @user_bp.route("/huella/next-id", methods=["GET"])
 def get_next_huella_id():
