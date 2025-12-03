@@ -454,7 +454,6 @@ def assign_huella_id():
 @user_bp.route("/huella/assign-manual", methods=["POST"])
 @jwt_required()
 @admin_required
-@cross_origin()
 def assign_huella_manual():
     data = request.get_json() or {}
     
