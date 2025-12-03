@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, app
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
@@ -18,7 +18,7 @@ def create_app():
     migrate.init_app(app, db)
 
 
-    CORS(app) 
+    CORS(app, resources={r"/*": {"origins": "*"}})
     from app.routes.auth import bp as auth_bp
     from app.routes.access import bp as access_bp
     from app.routes.attendance import bp as attendance_bp
