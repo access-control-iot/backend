@@ -502,7 +502,7 @@ def assign_huella_manual():
             "user_id": user_id,
             "username": user.username,
             "nombre": user.nombre,
-            "huella_created": huella_record is None  # True si se creó nuevo
+            "huella_created": huella_record is not None  # True si se creó nuevo
         }), 200
         
     except Exception as e:
