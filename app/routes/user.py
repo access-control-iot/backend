@@ -518,3 +518,32 @@ def verify_rfid():
             "message": "RFID disponible",
             "available": True
         }), 200
+@user_bp.route("/<int:user_id>", methods=["GET"])
+@jwt_required()
+def get_user(user_id):
+  
+    try:
+        user = User_iot.query.get_or_404(user_id)
+        claims = get_jwt()
+        current_user_id = get_jwt_identity()
+        if claims.get("role") != "admin" and current_user_id != user_id:
+            return jsonify(msg="No autorizado"), 403
+        user_data = {
+            "id": user.id,
+            "username": user.username,
+            "nombre": user.nombre,
+            "apellido": user.apellido,
+            "genero": user.genero,
+            "fecha_nacimiento": user.fecha_nacimiento.isoformat() if user.fecha_nacimiento else None,
+            "fecha_contrato": user.fecha_contrato.isoformat() if user.fecha_contrato else None,
+            "area_trabajo": user.area_trabajo,
+            "huella_id": user.huella_id,
+            "rfid": user.rfid,
+            "role": user.role.name if user.role else None,
+            "is_admin": user.is_admin
+        }
+        
+        return jsonify(user_data), 200
+        
+    except Exception as e:
+        return jsonify(msg=f"Error al obtener usuario: {str(e)}"), 500
