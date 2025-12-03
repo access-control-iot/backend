@@ -157,44 +157,68 @@ def fingerprint_attendance():
         }), 500
 
 
-def register_attendance_entry(user, timestamp, schedule_status):
-    today_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
-    
-    existing_entry = Attendance.query.filter(
-        Attendance.user_id == user.id,
-        Attendance.entry_time >= today_start,
-        Attendance.entry_time <= today_end
+def register_attendance_from_access(access_log: AccessLog):
+
+    if not access_log or not access_log.user_id:
+        return {'ok': False, 'reason': 'Datos insuficientes'}
+
+    ts = access_log.timestamp
+    if ts.tzinfo is None:
+        ts = pytz.utc.localize(ts)
+    lima_dt = ts.astimezone(LIMA_TZ)
+
+    user_id = access_log.user_id
+
+    hoy = lima_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    mañana = hoy + timedelta(days=1)
+
+    open_att = Attendance.query.filter(
+        Attendance.user_id == user_id,
+        Attendance.entry_time >= hoy,
+        Attendance.entry_time < mañana,
+        Attendance.exit_time.is_(None)
     ).first()
-    
-    if existing_entry:
-        return jsonify({
-            "success": False,
-            "reason": "Ya tiene una entrada registrada hoy"
-        }), 400
-    
 
-    attendance = Attendance(
-        user_id=user.id,
-        entry_time=timestamp,
-        estado_entrada=schedule_status['state']
-    )
-    db.session.add(attendance)
-    db.session.commit()
+    schedule = get_user_schedule(user_id, lima_dt)
+    schedule_info = check_schedule_status(schedule, lima_dt) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
     
-    return jsonify({
-        "success": True,
-        "action": "entry",
-        "attendance_id": attendance.id,
-        "user_id": user.id,
-        "nombre": user.nombre,
-        "apellido": user.apellido,
-        "entry_time": timestamp.isoformat(),
-        "estado_entrada": schedule_status['state'],
-        "minutes_diff": schedule_status['minutes_diff'],
-        "message": get_attendance_message(schedule_status, 'entry')
-    }), 201
-
+    if open_att:
+        
+        open_att.exit_time = access_log.timestamp
+        db.session.commit()
+        duracion = open_att.exit_time - open_att.entry_time
+        horas = int(duracion.total_seconds() // 3600)
+        minutos = int((duracion.total_seconds() % 3600) // 60)
+        
+        return {
+            'ok': True, 
+            'action': 'exit', 
+            'attendance_id': open_att.id, 
+            'schedule': schedule_info,
+            'estado': 'salida_registrada',
+            'duracion_jornada': f"{horas}h {minutos}m",
+            'entry_time': open_att.entry_time,
+            'exit_time': access_log.timestamp
+        }
+    else:
+        
+        estado = schedule_info.get('state') or 'sin_horario'
+        att = Attendance(
+            user_id=user_id, 
+            entry_time=access_log.timestamp, 
+            estado_entrada=estado
+        )
+        db.session.add(att)
+        db.session.commit()
+        
+        return {
+            'ok': True, 
+            'action': 'entry', 
+            'attendance_id': att.id, 
+            'schedule': schedule_info, 
+            'estado': estado,
+            'minutes_diff': schedule_info.get('minutes_diff')
+        }
 
 def register_attendance_exit(user, timestamp):
 
