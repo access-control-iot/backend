@@ -469,7 +469,6 @@ def assign_huella_manual():
     except ValueError:
         return jsonify(success=False, message="IDs deben ser números enteros"), 400
     
-
     if huella_id <= 0:
         return jsonify(success=False, message="huella_id debe ser mayor a 0"), 400
     
@@ -477,13 +476,22 @@ def assign_huella_manual():
     if not user:
         return jsonify(success=False, message="Usuario no encontrado"), 404
     
-
+    # Verificar si ya existe otro usuario con esta huella
     existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
     if existing_user and existing_user.id != user_id:
         return jsonify(success=False, message="Huella ID ya está asignado a otro usuario"), 400
     
     try:
-   
+        # VERIFICAR SI EL REGISTRO DE HUELLA EXISTE
+        huella_record = Huella.query.get(huella_id)
+        
+        # Si no existe, crearlo con un template vacío
+        if not huella_record:
+            huella_record = Huella(id=huella_id, template=b"")
+            db.session.add(huella_record)
+            print(f"Created huella record with id={huella_id}")
+        
+        # Asignar la huella al usuario
         user.huella_id = huella_id
         db.session.commit()
         
@@ -493,7 +501,8 @@ def assign_huella_manual():
             "huella_id": huella_id,
             "user_id": user_id,
             "username": user.username,
-            "nombre": user.nombre
+            "nombre": user.nombre,
+            "huella_created": huella_record is None  # True si se creó nuevo
         }), 200
         
     except Exception as e:
@@ -502,7 +511,6 @@ def assign_huella_manual():
             "success": False,
             "message": f"Error al asignar huella: {str(e)}"
         }), 500
-    
 @user_bp.route("/huella/verify-setup", methods=["POST"])
 def verify_fingerprint_setup():
     data = request.get_json() or {}
