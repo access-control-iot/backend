@@ -199,3 +199,42 @@ def listen_rfid_result():
         "available": True,
         "next_step": "Asignar este RFID a un usuario"
     }), 200
+
+@esp32_bp.route('/proxy/command', methods=['POST'])
+def proxy_command_to_esp32():
+    """Proxy para enviar comandos al ESP32 evitando mixed content"""
+    data = request.get_json() or {}
+    
+    esp32_ip = data.get('esp32_ip')
+    command = data.get('command')
+    huella_id = data.get('huella_id')
+    user_id = data.get('user_id')
+    
+    if not esp32_ip:
+        return jsonify({"success": False, "message": "IP del ESP32 requerida"}), 400
+    
+    try:
+        # Enviar comando al ESP32
+        response = requests.post(
+            f"http://{esp32_ip}/command",
+            json={
+                "command": command,
+                "huella_id": huella_id,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            },
+            timeout=10
+        )
+        
+        return jsonify({
+            "success": True,
+            "status": "success",
+            "message": f"Comando enviado a ESP32 ({esp32_ip})",
+            "esp32_response": response.json() if response.content else None
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error comunicándose con ESP32: {str(e)}"
+        }), 500
