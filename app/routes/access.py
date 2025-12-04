@@ -8,7 +8,7 @@ import csv
 import pytz
 
 from app import db
-from app.models import User_iot, AccessLog, Role, UserSchedule, Schedule, FailedAttempt, Attendance
+from app.models import AccessStatusEnum, User_iot, AccessLog, Role, UserSchedule, Schedule, FailedAttempt, Attendance
 
 bp = Blueprint('access', __name__)
 LIMA_TZ = pytz.timezone("America/Lima")
@@ -408,15 +408,12 @@ def access_reports():
         # Paginación
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         
-        # Obtener estadísticas
+        # Obtener estadísticas - USAR LOS NOMBRES CORRECTOS DEL ENUM
         total_count = query.count()
         
-        # Para estadísticas, necesitamos manejar el enum correctamente
-        from app.models import AccessStatusEnum  # Importar el enum
-        
-        # Convertir enum a string para las consultas
-        allowed_count = query.filter(AccessLog.status == AccessStatusEnum.PERMITIDO).count()
-        denied_count = query.filter(AccessLog.status == AccessStatusEnum.DENEGADO).count()
+        # CORREGIDO: Usar AccessStatusEnum.Permitido (no PERMITIDO)
+        allowed_count = query.filter(AccessLog.status == AccessStatusEnum.Permitido).count()
+        denied_count = query.filter(AccessLog.status == AccessStatusEnum.Denegado).count()
         fingerprint_count = query.filter(AccessLog.sensor_type == 'Huella').count()
         rfid_count = query.filter(AccessLog.sensor_type == 'RFID').count()
         
@@ -462,7 +459,7 @@ def access_reports():
                 'timestamp': log.timestamp.isoformat() if log.timestamp else None,
                 'local_time': lima_time.strftime('%Y-%m-%d %H:%M:%S') if lima_time else None,
                 'sensor_type': log.sensor_type,
-                'status': status_str,  # Usar string en lugar del enum
+                'status': status_str,
                 'access_method': access_method,
                 'action_type': action,
                 'reason': log.reason or log.motivo_decision,
@@ -584,7 +581,16 @@ def export_access_reports():
                 action = 'ZONA SEGURA'
         
         # Hora Lima
-        lima_time = log.timestamp.astimezone(LIMA_TZ) if log.timestamp else None
+        lima_time = None
+        if log.timestamp:
+            if log.timestamp.tzinfo is None:
+                utc_time = log.timestamp.replace(tzinfo=pytz.UTC)
+            else:
+                utc_time = log.timestamp
+            lima_time = utc_time.astimezone(LIMA_TZ)
+        
+        # Convertir enum a string
+        status_str = log.status.value if hasattr(log.status, 'value') else str(log.status)
         
         cw.writerow([
             log.id,
@@ -594,7 +600,7 @@ def export_access_reports():
             log.timestamp.isoformat() if log.timestamp else '',
             lima_time.strftime('%Y-%m-%d %H:%M:%S') if lima_time else '',
             log.sensor_type,
-            log.status,
+            status_str,  # Usar string en lugar del enum
             access_method,
             action,
             log.action_type or '',
