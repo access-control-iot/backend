@@ -342,126 +342,148 @@ def access_reports():
     """
     Obtiene reportes de acceso con filtros avanzados
     """
-    current_user = _get_current_user_from_jwt()
-    if not current_user or not current_user.is_admin:
-        return jsonify(msg='Acceso denegado - Solo administradores'), 403
-    
-    # Parámetros de filtro
-    user_id = request.args.get('user_id', type=int)
-    sensor_type = request.args.get('sensor_type')
-    status = request.args.get('status')
-    action_type = request.args.get('action_type')
-    
-    # Fechas
-    start_date_str = request.args.get('start_date')
-    end_date_str = request.args.get('end_date')
-    
-    # Paginación
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    
-    # Construir consulta
-    query = AccessLog.query
-    
-    # Aplicar filtros
-    if user_id:
-        query = query.filter(AccessLog.user_id == user_id)
-    
-    if sensor_type:
-        query = query.filter(AccessLog.sensor_type == sensor_type)
-    
-    if status:
-        query = query.filter(AccessLog.status == status)
-    
-    if action_type:
-        query = query.filter(AccessLog.action_type.like(f'%{action_type}%'))
-    
-    # Filtrar por fechas
-    if start_date_str:
-        try:
-            start_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
-            query = query.filter(AccessLog.timestamp >= start_date)
-        except:
-            return jsonify(msg='Formato de fecha inicial inválido'), 400
-    
-    if end_date_str:
-        try:
-            end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
-            query = query.filter(AccessLog.timestamp <= end_date)
-        except:
-            return jsonify(msg='Formato de fecha final inválido'), 400
-    
-    # Ordenar por fecha más reciente primero
-    query = query.order_by(AccessLog.timestamp.desc())
-    
-    # Paginación
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-    
-    # Obtener estadísticas
-    total_count = query.count()
-    allowed_count = query.filter(AccessLog.status == 'Permitido').count()
-    denied_count = query.filter(AccessLog.status == 'Denegado').count()
-    fingerprint_count = query.filter(AccessLog.sensor_type == 'Huella').count()
-    rfid_count = query.filter(AccessLog.sensor_type == 'RFID').count()
-    
-    # Preparar resultados
-    results = []
-    for log in pagination.items:
-        user = User_iot.query.get(log.user_id) if log.user_id else None
+    try:
+        current_user = _get_current_user_from_jwt()
+        if not current_user or not current_user.is_admin:
+            return jsonify(msg='Acceso denegado - Solo administradores'), 403
         
-        # Determinar método de acceso
-        access_method = 'Desconocido'
-        if log.huella_id:
-            access_method = f'Huella ID: {log.huella_id}'
-        elif log.rfid:
-            access_method = f'RFID: {log.rfid}'
+        # Parámetros de filtro
+        user_id = request.args.get('user_id', type=int)
+        sensor_type = request.args.get('sensor_type')
+        status = request.args.get('status')
+        action_type = request.args.get('action_type')
         
-        # Determinar tipo de acción (ENTRADA/SALIDA)
-        action = 'ACCESO'
-        if log.action_type:
-            if 'ENTRADA' in log.action_type:
-                action = 'ENTRADA'
-            elif 'SALIDA' in log.action_type:
-                action = 'SALIDA'
-            elif 'ZONA_SEGURA' in log.action_type:
-                action = 'ZONA SEGURA'
+        # Fechas - CORREGIDO
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
         
-        # Convertir a hora local (Lima)
-        lima_time = log.timestamp.astimezone(LIMA_TZ) if log.timestamp else None
+        # Paginación
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 20, type=int)
         
-        results.append({
-            'id': log.id,
-            'user_id': log.user_id,
-            'user_name': f"{user.nombre} {user.apellido}" if user else 'Usuario no encontrado',
-            'user_username': user.username if user else None,
-            'timestamp': lima_time.isoformat() if lima_time else None,
-            'local_time': lima_time.strftime('%Y-%m-%d %H:%M:%S') if lima_time else None,
-            'sensor_type': log.sensor_type,
-            'status': log.status,
-            'access_method': access_method,
-            'action_type': action,
-            'reason': log.reason or log.motivo_decision,
-            'full_action_type': log.action_type
-        })
+        # Construir consulta
+        query = AccessLog.query
+        
+        # Aplicar filtros
+        if user_id:
+            query = query.filter(AccessLog.user_id == user_id)
+        
+        if sensor_type:
+            query = query.filter(AccessLog.sensor_type == sensor_type)
+        
+        if status:
+            query = query.filter(AccessLog.status == status)
+        
+        if action_type:
+            query = query.filter(AccessLog.action_type.like(f'%{action_type}%'))
+        
+        # Filtrar por fechas - CORREGIDO
+        if start_date_str:
+            try:
+                # Parsear fecha correctamente
+                if 'T' in start_date_str:
+                    start_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
+                else:
+                    start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+                query = query.filter(AccessLog.timestamp >= start_date)
+            except Exception as e:
+                return jsonify(msg=f'Formato de fecha inicial inválido: {str(e)}'), 400
+        
+        if end_date_str:
+            try:
+                # Parsear fecha correctamente
+                if 'T' in end_date_str:
+                    end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                else:
+                    end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+                query = query.filter(AccessLog.timestamp <= end_date)
+            except Exception as e:
+                return jsonify(msg=f'Formato de fecha final inválido: {str(e)}'), 400
+        
+        # Ordenar por fecha más reciente primero
+        query = query.order_by(AccessLog.timestamp.desc())
+        
+        # Paginación
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        
+        # Obtener estadísticas
+        total_count = query.count()
+        allowed_count = query.filter(AccessLog.status == 'Permitido').count()
+        denied_count = query.filter(AccessLog.status == 'Denegado').count()
+        fingerprint_count = query.filter(AccessLog.sensor_type == 'Huella').count()
+        rfid_count = query.filter(AccessLog.sensor_type == 'RFID').count()
+        
+        # Preparar resultados
+        results = []
+        for log in pagination.items:
+            user = User_iot.query.get(log.user_id) if log.user_id else None
+            
+            # Determinar método de acceso
+            access_method = 'Desconocido'
+            if log.huella_id:
+                access_method = f'Huella ID: {log.huella_id}'
+            elif log.rfid:
+                access_method = f'RFID: {log.rfid}'
+            
+            # Determinar tipo de acción (ENTRADA/SALIDA)
+            action = 'ACCESO'
+            if log.action_type:
+                if 'ENTRADA' in log.action_type:
+                    action = 'ENTRADA'
+                elif 'SALIDA' in log.action_type:
+                    action = 'SALIDA'
+                elif 'ZONA_SEGURA' in log.action_type:
+                    action = 'ZONA SEGURA'
+            
+            # Convertir a hora local (Lima)
+            lima_time = None
+            if log.timestamp:
+                if log.timestamp.tzinfo is None:
+                    # Si no tiene timezone, asumir UTC
+                    utc_time = log.timestamp.replace(tzinfo=pytz.UTC)
+                else:
+                    utc_time = log.timestamp
+                lima_time = utc_time.astimezone(LIMA_TZ)
+            
+            results.append({
+                'id': log.id,
+                'user_id': log.user_id,
+                'user_name': f"{user.nombre} {user.apellido}" if user else 'Usuario no encontrado',
+                'user_username': user.username if user else None,
+                'timestamp': log.timestamp.isoformat() if log.timestamp else None,
+                'local_time': lima_time.strftime('%Y-%m-%d %H:%M:%S') if lima_time else None,
+                'sensor_type': log.sensor_type,
+                'status': log.status,
+                'access_method': access_method,
+                'action_type': action,
+                'reason': log.reason or log.motivo_decision,
+                'full_action_type': log.action_type
+            })
+        
+        return jsonify({
+            'success': True,
+            'data': results,
+            'pagination': {
+                'page': pagination.page,
+                'per_page': pagination.per_page,
+                'total': pagination.total,
+                'pages': pagination.pages
+            },
+            'statistics': {
+                'total': total_count,
+                'allowed': allowed_count,
+                'denied': denied_count,
+                'fingerprint': fingerprint_count,
+                'rfid': rfid_count
+            }
+        }), 200
     
-    return jsonify({
-        'success': True,
-        'data': results,
-        'pagination': {
-            'page': pagination.page,
-            'per_page': pagination.per_page,
-            'total': pagination.total,
-            'pages': pagination.pages
-        },
-        'statistics': {
-            'total': total_count,
-            'allowed': allowed_count,
-            'denied': denied_count,
-            'fingerprint': fingerprint_count,
-            'rfid': rfid_count
-        }
-    }), 200
-
+    except Exception as e:
+        print(f"Error en access_reports: {str(e)}")
+        return jsonify({
+            'success': False,
+            'msg': f'Error interno del servidor: {str(e)}'
+        }), 500
 
 @bp.route('/admin/reports/export', methods=['GET'])
 @jwt_required()
