@@ -336,7 +336,248 @@ def export_csv():
 def register_attendance_from_access(access_log):
     from app.routes.attendance import register_attendance_from_access as new_attendance_func
     return new_attendance_func(access_log)
+@bp.route('/admin/reports', methods=['GET'])
+@jwt_required()
+def access_reports():
+    """
+    Obtiene reportes de acceso con filtros avanzados
+    """
+    current_user = _get_current_user_from_jwt()
+    if not current_user or not current_user.is_admin:
+        return jsonify(msg='Acceso denegado - Solo administradores'), 403
+    
+    # Parámetros de filtro
+    user_id = request.args.get('user_id', type=int)
+    sensor_type = request.args.get('sensor_type')
+    status = request.args.get('status')
+    action_type = request.args.get('action_type')
+    
+    # Fechas
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+    
+    # Paginación
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    
+    # Construir consulta
+    query = AccessLog.query
+    
+    # Aplicar filtros
+    if user_id:
+        query = query.filter(AccessLog.user_id == user_id)
+    
+    if sensor_type:
+        query = query.filter(AccessLog.sensor_type == sensor_type)
+    
+    if status:
+        query = query.filter(AccessLog.status == status)
+    
+    if action_type:
+        query = query.filter(AccessLog.action_type.like(f'%{action_type}%'))
+    
+    # Filtrar por fechas
+    if start_date_str:
+        try:
+            start_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
+            query = query.filter(AccessLog.timestamp >= start_date)
+        except:
+            return jsonify(msg='Formato de fecha inicial inválido'), 400
+    
+    if end_date_str:
+        try:
+            end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+            query = query.filter(AccessLog.timestamp <= end_date)
+        except:
+            return jsonify(msg='Formato de fecha final inválido'), 400
+    
+    # Ordenar por fecha más reciente primero
+    query = query.order_by(AccessLog.timestamp.desc())
+    
+    # Paginación
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    # Obtener estadísticas
+    total_count = query.count()
+    allowed_count = query.filter(AccessLog.status == 'Permitido').count()
+    denied_count = query.filter(AccessLog.status == 'Denegado').count()
+    fingerprint_count = query.filter(AccessLog.sensor_type == 'Huella').count()
+    rfid_count = query.filter(AccessLog.sensor_type == 'RFID').count()
+    
+    # Preparar resultados
+    results = []
+    for log in pagination.items:
+        user = User_iot.query.get(log.user_id) if log.user_id else None
+        
+        # Determinar método de acceso
+        access_method = 'Desconocido'
+        if log.huella_id:
+            access_method = f'Huella ID: {log.huella_id}'
+        elif log.rfid:
+            access_method = f'RFID: {log.rfid}'
+        
+        # Determinar tipo de acción (ENTRADA/SALIDA)
+        action = 'ACCESO'
+        if log.action_type:
+            if 'ENTRADA' in log.action_type:
+                action = 'ENTRADA'
+            elif 'SALIDA' in log.action_type:
+                action = 'SALIDA'
+            elif 'ZONA_SEGURA' in log.action_type:
+                action = 'ZONA SEGURA'
+        
+        # Convertir a hora local (Lima)
+        lima_time = log.timestamp.astimezone(LIMA_TZ) if log.timestamp else None
+        
+        results.append({
+            'id': log.id,
+            'user_id': log.user_id,
+            'user_name': f"{user.nombre} {user.apellido}" if user else 'Usuario no encontrado',
+            'user_username': user.username if user else None,
+            'timestamp': lima_time.isoformat() if lima_time else None,
+            'local_time': lima_time.strftime('%Y-%m-%d %H:%M:%S') if lima_time else None,
+            'sensor_type': log.sensor_type,
+            'status': log.status,
+            'access_method': access_method,
+            'action_type': action,
+            'reason': log.reason or log.motivo_decision,
+            'full_action_type': log.action_type
+        })
+    
+    return jsonify({
+        'success': True,
+        'data': results,
+        'pagination': {
+            'page': pagination.page,
+            'per_page': pagination.per_page,
+            'total': pagination.total,
+            'pages': pagination.pages
+        },
+        'statistics': {
+            'total': total_count,
+            'allowed': allowed_count,
+            'denied': denied_count,
+            'fingerprint': fingerprint_count,
+            'rfid': rfid_count
+        }
+    }), 200
 
+
+@bp.route('/admin/reports/export', methods=['GET'])
+@jwt_required()
+def export_access_reports():
+    """
+    Exporta reportes de acceso a CSV
+    """
+    current_user = _get_current_user_from_jwt()
+    if not current_user or not current_user.is_admin:
+        return jsonify(msg='Acceso denegado'), 403
+    
+    # Parámetros de filtro (mismos que en /admin/reports)
+    user_id = request.args.get('user_id', type=int)
+    sensor_type = request.args.get('sensor_type')
+    status = request.args.get('status')
+    action_type = request.args.get('action_type')
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+    
+    # Construir consulta
+    query = AccessLog.query
+    
+    if user_id:
+        query = query.filter(AccessLog.user_id == user_id)
+    if sensor_type:
+        query = query.filter(AccessLog.sensor_type == sensor_type)
+    if status:
+        query = query.filter(AccessLog.status == status)
+    if action_type:
+        query = query.filter(AccessLog.action_type.like(f'%{action_type}%'))
+    
+    if start_date_str:
+        try:
+            start_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
+            query = query.filter(AccessLog.timestamp >= start_date)
+        except:
+            return jsonify(msg='Fecha inicial inválida'), 400
+    
+    if end_date_str:
+        try:
+            end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+            query = query.filter(AccessLog.timestamp <= end_date)
+        except:
+            return jsonify(msg='Fecha final inválida'), 400
+    
+    logs = query.order_by(AccessLog.timestamp.desc()).all()
+    
+    # Crear CSV
+    si = StringIO()
+    cw = csv.writer(si)
+    
+    # Encabezados
+    cw.writerow([
+        'ID', 
+        'Usuario ID', 
+        'Nombre Usuario',
+        'Username',
+        'Fecha/Hora (UTC)',
+        'Fecha/Hora (Lima)',
+        'Sensor',
+        'Estado',
+        'Método de Acceso',
+        'Tipo de Acción',
+        'Detalles',
+        'Motivo'
+    ])
+    
+    # Filas
+    for log in logs:
+        user = User_iot.query.get(log.user_id) if log.user_id else None
+        
+        # Método de acceso
+        access_method = ''
+        if log.huella_id:
+            access_method = f'Huella ID: {log.huella_id}'
+        elif log.rfid:
+            access_method = f'RFID: {log.rfid}'
+        
+        # Tipo de acción
+        action = 'ACCESO'
+        if log.action_type:
+            if 'ENTRADA' in log.action_type:
+                action = 'ENTRADA'
+            elif 'SALIDA' in log.action_type:
+                action = 'SALIDA'
+            elif 'ZONA_SEGURA' in log.action_type:
+                action = 'ZONA SEGURA'
+        
+        # Hora Lima
+        lima_time = log.timestamp.astimezone(LIMA_TZ) if log.timestamp else None
+        
+        cw.writerow([
+            log.id,
+            log.user_id,
+            f"{user.nombre} {user.apellido}" if user else 'N/A',
+            user.username if user else 'N/A',
+            log.timestamp.isoformat() if log.timestamp else '',
+            lima_time.strftime('%Y-%m-%d %H:%M:%S') if lima_time else '',
+            log.sensor_type,
+            log.status,
+            access_method,
+            action,
+            log.action_type or '',
+            log.reason or log.motivo_decision or ''
+        ])
+    
+    output = si.getvalue()
+    
+    # Generar nombre de archivo con fecha
+    filename = f"reporte_accesos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    
+    return Response(
+        output,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment;filename={filename}"}
+    )
 @bp.route('/setup', methods=['POST'])
 def setup_system():
     if User_iot.query.first():
