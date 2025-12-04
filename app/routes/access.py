@@ -339,32 +339,30 @@ def register_attendance_from_access(access_log):
 @bp.route('/admin/reports', methods=['GET'])
 @jwt_required()
 def access_reports():
-    """
-    Obtiene reportes de acceso con filtros avanzados
-    """
+
     try:
         current_user = _get_current_user_from_jwt()
         if not current_user or not current_user.is_admin:
             return jsonify(msg='Acceso denegado - Solo administradores'), 403
         
-        # Parámetros de filtro
+   
         user_id = request.args.get('user_id', type=int)
         sensor_type = request.args.get('sensor_type')
         status = request.args.get('status')
         action_type = request.args.get('action_type')
         
-        # Fechas
+        
         start_date_str = request.args.get('start_date')
         end_date_str = request.args.get('end_date')
         
-        # Paginación
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 20, type=int)
         
-        # Construir consulta
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        
+
         query = AccessLog.query
         
-        # Aplicar filtros
+   
         if user_id:
             query = query.filter(AccessLog.user_id == user_id)
         
@@ -377,14 +375,14 @@ def access_reports():
         if action_type:
             query = query.filter(AccessLog.action_type.like(f'%{action_type}%'))
         
-        # Filtrar por fechas
+
         if start_date_str:
             try:
-                # Parsear fecha ISO
+    
                 start_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
                 query = query.filter(AccessLog.timestamp >= start_date)
             except ValueError:
-                # Intentar formato sin timezone
+       
                 try:
                     start_date = datetime.strptime(start_date_str, '%Y-%m-%dT%H:%M:%S.%fZ')
                     query = query.filter(AccessLog.timestamp >= start_date)
@@ -402,34 +400,34 @@ def access_reports():
                 except:
                     return jsonify(msg='Formato de fecha final inválido. Use ISO format'), 400
         
-        # Ordenar por fecha más reciente primero
+ 
         query = query.order_by(AccessLog.timestamp.desc())
         
-        # Paginación
+
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         
-        # Obtener estadísticas - USAR LOS NOMBRES CORRECTOS DEL ENUM
+       
         total_count = query.count()
         
-        # CORREGIDO: Usar AccessStatusEnum.Permitido (no PERMITIDO)
+   
         allowed_count = query.filter(AccessLog.status == AccessStatusEnum.Permitido).count()
         denied_count = query.filter(AccessLog.status == AccessStatusEnum.Denegado).count()
         fingerprint_count = query.filter(AccessLog.sensor_type == 'Huella').count()
         rfid_count = query.filter(AccessLog.sensor_type == 'RFID').count()
         
-        # Preparar resultados
+
         results = []
         for log in pagination.items:
             user = User_iot.query.get(log.user_id) if log.user_id else None
             
-            # Determinar método de acceso
+ 
             access_method = 'Desconocido'
             if log.huella_id:
                 access_method = f'Huella ID: {log.huella_id}'
             elif log.rfid:
                 access_method = f'RFID: {log.rfid}'
             
-            # Determinar tipo de acción (ENTRADA/SALIDA)
+ 
             action = 'ACCESO'
             if log.action_type:
                 if 'ENTRADA' in log.action_type:
@@ -439,7 +437,7 @@ def access_reports():
                 elif 'ZONA_SEGURA' in log.action_type:
                     action = 'ZONA SEGURA'
             
-            # Convertir a hora local (Lima)
+
             lima_time = None
             if log.timestamp:
                 if log.timestamp.tzinfo is None:
@@ -448,7 +446,7 @@ def access_reports():
                     utc_time = log.timestamp
                 lima_time = utc_time.astimezone(LIMA_TZ)
             
-            # Convertir enum a string para JSON
+ 
             status_str = log.status.value if hasattr(log.status, 'value') else str(log.status)
             
             results.append({
@@ -496,14 +494,12 @@ def access_reports():
 @bp.route('/admin/reports/export', methods=['GET'])
 @jwt_required()
 def export_access_reports():
-    """
-    Exporta reportes de acceso a CSV
-    """
+
     current_user = _get_current_user_from_jwt()
     if not current_user or not current_user.is_admin:
         return jsonify(msg='Acceso denegado'), 403
     
-    # Parámetros de filtro (mismos que en /admin/reports)
+
     user_id = request.args.get('user_id', type=int)
     sensor_type = request.args.get('sensor_type')
     status = request.args.get('status')
