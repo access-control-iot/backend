@@ -353,7 +353,7 @@ def access_reports():
         status = request.args.get('status')
         action_type = request.args.get('action_type')
         
-        # Fechas - CORREGIDO
+        # Fechas
         start_date_str = request.args.get('start_date')
         end_date_str = request.args.get('end_date')
         
@@ -377,28 +377,30 @@ def access_reports():
         if action_type:
             query = query.filter(AccessLog.action_type.like(f'%{action_type}%'))
         
-        # Filtrar por fechas - CORREGIDO
+        # Filtrar por fechas
         if start_date_str:
             try:
-                # Parsear fecha correctamente
-                if 'T' in start_date_str:
-                    start_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
-                else:
-                    start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+                # Parsear fecha ISO
+                start_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
                 query = query.filter(AccessLog.timestamp >= start_date)
-            except Exception as e:
-                return jsonify(msg=f'Formato de fecha inicial inválido: {str(e)}'), 400
+            except ValueError:
+                # Intentar formato sin timezone
+                try:
+                    start_date = datetime.strptime(start_date_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+                    query = query.filter(AccessLog.timestamp >= start_date)
+                except:
+                    return jsonify(msg='Formato de fecha inicial inválido. Use ISO format'), 400
         
         if end_date_str:
             try:
-                # Parsear fecha correctamente
-                if 'T' in end_date_str:
-                    end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
-                else:
-                    end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+                end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
                 query = query.filter(AccessLog.timestamp <= end_date)
-            except Exception as e:
-                return jsonify(msg=f'Formato de fecha final inválido: {str(e)}'), 400
+            except ValueError:
+                try:
+                    end_date = datetime.strptime(end_date_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+                    query = query.filter(AccessLog.timestamp <= end_date)
+                except:
+                    return jsonify(msg='Formato de fecha final inválido. Use ISO format'), 400
         
         # Ordenar por fecha más reciente primero
         query = query.order_by(AccessLog.timestamp.desc())
@@ -408,8 +410,13 @@ def access_reports():
         
         # Obtener estadísticas
         total_count = query.count()
-        allowed_count = query.filter(AccessLog.status == 'Permitido').count()
-        denied_count = query.filter(AccessLog.status == 'Denegado').count()
+        
+        # Para estadísticas, necesitamos manejar el enum correctamente
+        from app.models import AccessStatusEnum  # Importar el enum
+        
+        # Convertir enum a string para las consultas
+        allowed_count = query.filter(AccessLog.status == AccessStatusEnum.PERMITIDO).count()
+        denied_count = query.filter(AccessLog.status == AccessStatusEnum.DENEGADO).count()
         fingerprint_count = query.filter(AccessLog.sensor_type == 'Huella').count()
         rfid_count = query.filter(AccessLog.sensor_type == 'RFID').count()
         
@@ -439,11 +446,13 @@ def access_reports():
             lima_time = None
             if log.timestamp:
                 if log.timestamp.tzinfo is None:
-                    # Si no tiene timezone, asumir UTC
                     utc_time = log.timestamp.replace(tzinfo=pytz.UTC)
                 else:
                     utc_time = log.timestamp
                 lima_time = utc_time.astimezone(LIMA_TZ)
+            
+            # Convertir enum a string para JSON
+            status_str = log.status.value if hasattr(log.status, 'value') else str(log.status)
             
             results.append({
                 'id': log.id,
@@ -453,7 +462,7 @@ def access_reports():
                 'timestamp': log.timestamp.isoformat() if log.timestamp else None,
                 'local_time': lima_time.strftime('%Y-%m-%d %H:%M:%S') if lima_time else None,
                 'sensor_type': log.sensor_type,
-                'status': log.status,
+                'status': status_str,  # Usar string en lugar del enum
                 'access_method': access_method,
                 'action_type': action,
                 'reason': log.reason or log.motivo_decision,
@@ -479,7 +488,9 @@ def access_reports():
         }), 200
     
     except Exception as e:
+        import traceback
         print(f"Error en access_reports: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({
             'success': False,
             'msg': f'Error interno del servidor: {str(e)}'
