@@ -78,47 +78,74 @@ def send_command_to_esp32():
 
 @esp32_bp.route('/listen-fingerprint', methods=['POST'])
 def listen_fingerprint_result():
- 
+    """Recibir notificación de registro de huella desde ESP32"""
     data = request.get_json() or {}
     
     huella_id = data.get('huella_id')
     template_b64 = data.get('template')
+    user_id = data.get('user_id')  # Añadido
     success = data.get('success', False)
     message = data.get('message', '')
     
     if not huella_id:
         return jsonify(success=False, message="huella_id requerido"), 400
     
-    if success and not template_b64:
-        return jsonify(success=False, message="template requerido cuando success=True"), 400
-    
+    # NO requerir template si success=True
+    # Permitir registros exitosos sin template
     if success:
-        from app.models import Huella
+        from app.models import Huella, User_iot
         from app import db
         import base64
         
         try:
-            template_bytes = base64.b64decode(template_b64)
+            # Verificar si el usuario existe y tiene esta huella asignada
+            if user_id:
+                user = User_iot.query.get(user_id)
+                if user and user.huella_id != huella_id:
+                    return jsonify({
+                        "success": False,
+                        "message": f"Huella {huella_id} no está asignada al usuario {user_id}"
+                    }), 400
             
-            huella = Huella(id=huella_id, template=template_bytes)
+            # Intentar guardar template si está presente y es válido
+            if template_b64 and template_b64 not in ["REGISTRADO", "REGI"]:
+                try:
+                    # Verificar que sea base64 válido
+                    if len(template_b64) % 4 == 0:  # Base64 válido debe tener longitud múltiplo de 4
+                        template_bytes = base64.b64decode(template_b64)
+                        huella = Huella(id=huella_id, template=template_bytes)
+                    else:
+                        # Si no es base64 válido, crear registro vacío
+                        huella = Huella(id=huella_id, template=b"registered")
+                except:
+                    # Si hay error al decodificar, crear registro vacío
+                    huella = Huella(id=huella_id, template=b"registered")
+            else:
+                # Si no hay template o es un placeholder, crear registro vacío
+                huella = Huella(id=huella_id, template=b"registered")
+            
             db.session.merge(huella)
             db.session.commit()
             
             return jsonify({
                 "success": True,
-                "message": "Template de huella guardado correctamente",
-                "huella_id": huella_id
+                "message": "Huella registrada exitosamente en sistema",
+                "huella_id": huella_id,
+                "user_id": user_id,
+                "has_template": template_b64 and template_b64 not in ["REGISTRADO", "REGI"]
             }), 200
             
         except Exception as e:
+            db.session.rollback()
             return jsonify({
                 "success": False,
-                "message": f"Error guardando template: {str(e)}"
+                "message": f"Error en base de datos: {str(e)}"
             }), 500
     else:
+        # Si el registro no fue exitoso
         return jsonify({
             "success": False,
-            "message": f"Registro fallido: {message}",
+            "message": f"Registro fallido en ESP32: {message}",
             "huella_id": huella_id
         }), 200
 
