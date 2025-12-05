@@ -198,7 +198,23 @@ def assign_schedule():
 
     return jsonify(msg='Horario asignado'), 201
 
-
+@schedule_bp.route('/<int:schedule_id>', methods=['GET'])
+@jwt_required()
+@admin_required
+def get_schedule(schedule_id):
+  
+    schedule = Schedule.query.get_or_404(schedule_id)
+    
+    return jsonify({
+        'id': schedule.id,
+        'nombre': schedule.nombre,
+        'hora_entrada': schedule.hora_entrada.strftime('%H:%M'),
+        'tolerancia_entrada': schedule.tolerancia_entrada,
+        'hora_salida': schedule.hora_salida.strftime('%H:%M'),
+        'tolerancia_salida': schedule.tolerancia_salida,
+        'dias': schedule.dias,
+        'tipo': schedule.tipo
+    }), 200
 @schedule_bp.route('/<int:schedule_id>', methods=['PUT'])
 @jwt_required()
 @admin_required
