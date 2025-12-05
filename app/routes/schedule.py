@@ -273,31 +273,69 @@ def update_schedule(schedule_id):
     return jsonify(msg='Horario actualizado'), 200
 
 
-@schedule_bp.route('/<int:schedule_id>', methods=['DELETE'])
+@schedule_bp.route('/<int:schedule_id>/force', methods=['DELETE'])
 @jwt_required()
 @admin_required
-def delete_schedule(schedule_id):
+def force_delete_schedule(schedule_id):
+    """Elimina el horario y todas sus asignaciones"""
     schedule = Schedule.query.get(schedule_id)
     if not schedule:
         return jsonify(msg='Horario no encontrado'), 404
         
-    # Verificar si hay asignaciones activas
-    active_us = UserSchedule.query.filter(
-        UserSchedule.schedule_id == schedule_id,
-        (UserSchedule.end_date == None) | (UserSchedule.end_date >= date.today())
-    ).first()
-
-    if active_us:
-        return jsonify(msg='No se puede eliminar: existen asignaciones activas'), 400
-
+    # Eliminar todas las asignaciones primero
+    UserSchedule.query.filter_by(schedule_id=schedule_id).delete()
+    
+    # Ahora eliminar el horario
     db.session.delete(schedule)
     db.session.commit()
 
     admin = _get_user_from_identity(get_jwt_identity())
     record_audit(schedule_id=schedule_id, admin_id=admin.id if admin else None,
-                 change_type='delete', details=f'Eliminado schedule {schedule_id}')
-    return jsonify(msg='Horario eliminado'), 200
+                 change_type='force_delete', details=f'Eliminado forzado schedule {schedule_id} con todas sus asignaciones')
+    
+    return jsonify(msg='Horario y asignaciones eliminados'), 200
 
+
+@schedule_bp.route('/<int:schedule_id>/reassign', methods=['POST'])
+@jwt_required()
+@admin_required
+def reassign_and_delete_schedule(schedule_id):
+    """Reasigna usuarios a otro horario y luego elimina"""
+    data = request.get_json() or {}
+    
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+        
+    new_schedule_id = data.get('new_schedule_id')
+    if not new_schedule_id:
+        return jsonify(msg='Se requiere nuevo horario'), 400
+        
+    new_schedule = Schedule.query.get(new_schedule_id)
+    if not new_schedule:
+        return jsonify(msg='Nuevo horario no encontrado'), 404
+        
+    # Reasignar todos los usuarios
+    assignments = UserSchedule.query.filter_by(schedule_id=schedule_id).all()
+    reassigned = 0
+    
+    for assignment in assignments:
+        assignment.schedule_id = new_schedule_id
+        reassigned += 1
+    
+    # Eliminar el horario original
+    db.session.delete(schedule)
+    db.session.commit()
+
+    admin = _get_user_from_identity(get_jwt_identity())
+    record_audit(
+        schedule_id=schedule_id,
+        admin_id=admin.id if admin else None,
+        change_type='reassign_delete',
+        details=f'Reasignados {reassigned} usuarios a schedule {new_schedule_id} y eliminado schedule {schedule_id}'
+    )
+    
+    return jsonify(msg=f'Horario eliminado y {reassigned} usuarios reasignados'), 200
 
 @schedule_bp.route('/audit', methods=['GET'])
 @jwt_required()
