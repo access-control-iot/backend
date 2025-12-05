@@ -1008,3 +1008,164 @@ def bulk_activate_users():
         "activated": activated,
         "failed": failed
     }), 200
+# En user.py, busca las funciones de huella y añade versiones públicas SIN @jwt_required()
+
+@user_bp.route("/huella/public/register", methods=["POST"])
+@cross_origin()
+def register_huella_public():
+    """Endpoint público para registro de huella (para ESP32)"""
+    try:
+        data = request.get_json() or {}
+        
+        huella_id = data.get("huella_id")
+        template_b64 = data.get("template")
+        user_id = data.get("user_id")
+        
+        print(f"Registro público huella - huella_id: {huella_id}, user_id: {user_id}")
+        
+        if not huella_id:
+            return jsonify(success=False, message="huella_id es requerido"), 400
+        
+        try:
+            huella_id = int(huella_id)
+        except:
+            return jsonify(success=False, message="huella_id debe ser entero"), 400
+        
+        # Verificar si el usuario existe si se proporciona user_id
+        if user_id:
+            try:
+                user_id = int(user_id)
+                user = User_iot.query.get(user_id)
+                if not user:
+                    return jsonify(success=False, message="Usuario no encontrado"), 404
+                
+                # Verificar si la huella ya está asignada a otro usuario
+                existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
+                if existing_user and existing_user.id != user_id:
+                    return jsonify(success=False, 
+                                  message=f"Huella ya asignada a usuario {existing_user.username}"), 400
+                
+                # Asignar huella al usuario
+                user.huella_id = huella_id
+                
+            except Exception as e:
+                print(f"Error asignando huella a usuario: {str(e)}")
+                # Continuar sin asignar al usuario si hay error
+        
+        # Manejar el template
+        template_bytes = None
+        if template_b64:
+            try:
+                template_bytes = base64.b64decode(template_b64)
+                print(f"Template recibido, tamaño: {len(template_bytes)} bytes")
+            except Exception as e:
+                print(f"Error decodificando template: {str(e)}")
+                # Crear template vacío si hay error
+                template_bytes = b"registered"
+        else:
+            # Si no hay template, crear uno vacío
+            template_bytes = b"registered"
+        
+        # Crear o actualizar registro de huella
+        huella = Huella.query.get(huella_id)
+        if huella:
+            # Actualizar template si existe
+            if template_bytes:
+                huella.template = template_bytes
+        else:
+            # Crear nuevo registro
+            huella = Huella(id=huella_id, template=template_bytes)
+            db.session.add(huella)
+        
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Huella registrada correctamente",
+            "huella_id": huella_id,
+            "user_id": user_id if user_id else None,
+            "has_template": bool(template_b64)
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error en registro público de huella: {str(e)}")
+        return jsonify(success=False, message=f"Error del servidor: {str(e)}"), 500
+
+@user_bp.route("/huella/public/check/<int:huella_id>", methods=["GET"])
+@cross_origin()
+def check_fingerprint_public(huella_id):
+    """Verificar huella públicamente"""
+    huella = Huella.query.get(huella_id)
+    
+    if not huella:
+        return jsonify({
+            "success": True,  # Cambiado a True porque es normal que no exista
+            "exists": False,
+            "message": f"Huella ID {huella_id} no encontrada"
+        }), 200  # Cambiado a 200 para que ESP32 no reciba error
+    
+    user = User_iot.query.filter_by(huella_id=huella_id).first()
+    
+    return jsonify({
+        "success": True,
+        "exists": True,
+        "huella_id": huella_id,
+        "has_template": bool(huella.template and len(huella.template) > 0),
+        "template_size": len(huella.template) if huella.template else 0,
+        "assigned_to": {
+            "user_id": user.id if user else None,
+            "nombre": user.nombre if user else None
+        } if user else None
+    }), 200
+
+@user_bp.route("/huella/public/confirm", methods=["POST"])
+@cross_origin()
+def confirm_huella_public():
+    """Confirmar registro de huella públicamente"""
+    data = request.get_json() or {}
+    
+    huella_id = data.get("huella_id")
+    user_id = data.get("user_id")
+    
+    if not huella_id:
+        return jsonify(success=False, message="huella_id requerido"), 400
+    
+    try:
+        huella_id = int(huella_id)
+    except:
+        return jsonify(success=False, message="huella_id debe ser número entero"), 400
+    
+    # Verificar que el registro de huella existe
+    huella_record = Huella.query.get(huella_id)
+    if not huella_record:
+        return jsonify(success=False, message="Registro de huella no encontrado"), 404
+    
+    # Si se proporciona user_id, asignar al usuario
+    if user_id:
+        try:
+            user_id = int(user_id)
+            user = User_iot.query.get(user_id)
+            if not user:
+                return jsonify(success=False, message="Usuario no encontrado"), 404
+            
+            # Verificar si ya está asignada a otro usuario
+            existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
+            if existing_user and existing_user.id != user_id:
+                return jsonify(success=False, 
+                              message="Huella ya está asignada a otro usuario"), 400
+            
+            user.huella_id = huella_id
+            
+        except Exception as e:
+            print(f"Error asignando huella a usuario: {str(e)}")
+    
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": "Registro de huella confirmado",
+        "huella_id": huella_id,
+        "user_id": user_id,
+        "has_template": bool(huella_record.template and len(huella_record.template) > 0)
+    }), 200
