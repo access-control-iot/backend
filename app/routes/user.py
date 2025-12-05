@@ -48,7 +48,7 @@ def create_user():
     required = ["username", "password", "nombre", "apellido"]
     for field in required:
         if field not in data:
-            return jsonify(msg=f"Campo requerido: {field}"), 400
+            jsonify(msg=f"Campo requerido: {field}"), 400
 
     
     if User_iot.query.filter_by(username=data["username"]).first():
@@ -839,14 +839,25 @@ def update_user_complete(user_id):
     
     # 6. Actualizar rol si se proporciona
     if "role" in data:
-        role_name = data["role"]
-        role = Role.query.filter_by(name=role_name).first()
-        if not role:
-            return jsonify({
-                "success": False,
-                "msg": f"Rol inválido: {role_name}"
-            }), 400
-        
+    role_in = data["role"].strip().lower()  # normaliza entrada
+
+    # Mapeo por si en BD tienes otros nombres
+    role_map = {
+        "admin": "admin",
+        "administrador": "admin",
+        "empleado": "employee",  # <---- CAMBIA AQUÍ SEGÚN TU BD
+        "employee": "employee"
+    }
+
+    # Convertimos la entrada al valor existente en base
+    role_name = role_map.get(role_in)
+
+    if not role_name:
+        return jsonify({"success": False, "msg": f"Rol inválido: {role_in}"}), 400
+
+    role = Role.query.filter_by(name=role_name).first()
+    user.role = role
+    
         # Validar que no se suspenda al último administrador
         if user.is_admin and role_name != "admin":
             admins = User_iot.query.filter_by(is_admin=True, is_active=True).count()
