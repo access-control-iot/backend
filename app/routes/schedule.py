@@ -137,6 +137,11 @@ def assign_schedule():
         schedule_id = int(data.get('schedule_id'))
         start_date = parse_date_str(data.get('start_date'))
         end_date = parse_date_str(data.get('end_date')) if data.get('end_date') else None
+        
+        # Verificar si se está asignando para hoy
+        today = date.today()
+        immediate_effect = (start_date == today)
+        
     except (TypeError, ValueError) as e:
         return jsonify(msg='Parámetros inválidos', detail=str(e)), 400
 
@@ -177,7 +182,11 @@ def assign_schedule():
 
     for us in existing_schedules:
         if horarios_chocan(schedule, us.schedule):
-            return jsonify(msg="El usuario ya tiene un horario asignado que se cruza en días y horas"), 400
+            # Si se está asignando para hoy y hay conflicto, terminar el horario anterior
+            if immediate_effect and us.end_date is None:
+                us.end_date = today
+            else:
+                return jsonify(msg="El usuario ya tiene un horario asignado que se cruza en días y horas"), 400
 
     us = UserSchedule(
         user_id=user_id,
@@ -193,27 +202,17 @@ def assign_schedule():
     record_audit(schedule_id=schedule_id, user_id=user_id, admin_id=admin.id if admin else None,
                  change_type='assign', details=details)
 
-    return jsonify(msg='Horario asignado'), 201
+    # Si se asignó para hoy, notificar al sistema de asistencia
+    if immediate_effect:
+        # Aquí podrías agregar lógica para notificar cambios
+        pass
 
-
-@schedule_bp.route('/<int:schedule_id>', methods=['GET'])
-@jwt_required()
-@admin_required
-def get_schedule(schedule_id):
-    schedule = Schedule.query.get(schedule_id)
-    if not schedule:
-        return jsonify(msg='Horario no encontrado'), 404
-    
     return jsonify({
-        'id': schedule.id,
-        'nombre': schedule.nombre,
-        'hora_entrada': schedule.hora_entrada.strftime('%H:%M'),
-        'tolerancia_entrada': schedule.tolerancia_entrada,
-        'hora_salida': schedule.hora_salida.strftime('%H:%M'),
-        'tolerancia_salida': schedule.tolerancia_salida,
-        'dias': schedule.dias,
-        'tipo': schedule.tipo
-    }), 200
+        'msg': 'Horario asignado',
+        'immediate_effect': immediate_effect,
+        'schedule_name': schedule.nombre,
+        'start_date': start_date.isoformat()
+    }), 201
 
 
 @schedule_bp.route('/<int:schedule_id>', methods=['PUT'])
