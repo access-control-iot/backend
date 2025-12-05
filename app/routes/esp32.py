@@ -70,7 +70,8 @@ def listen_fingerprint_result():
     if not huella_id:
         return jsonify(success=False, message="huella_id requerido"), 400
     
-    if success:
+    # ACEPTAR mensajes "REGISTRADO" como éxito incluso si no viene success: true
+    if success or message == "REGISTRADO":
         from app.models import Huella, User_iot
         from app import db
         import base64
@@ -85,21 +86,24 @@ def listen_fingerprint_result():
                         "message": f"Huella {huella_id} no está asignada al usuario {user_id}"
                     }), 400
             
-            # Intentar guardar template si está presente y es válido
+            # Crear registro de huella (con template vacío si no viene)
             if template_b64 and template_b64 not in ["REGISTRADO", "REGI"]:
                 try:
-                    # Verificar que sea base64 válido
-                    if len(template_b64) % 4 == 0:
-                        template_bytes = base64.b64decode(template_b64)
-                        huella = Huella(id=huella_id, template=template_bytes)
-                    else:
-                        huella = Huella(id=huella_id, template=b"registered")
+                    template_bytes = base64.b64decode(template_b64)
+                    huella = Huella(id=huella_id, template=template_bytes)
                 except:
                     huella = Huella(id=huella_id, template=b"registered")
             else:
                 huella = Huella(id=huella_id, template=b"registered")
             
             db.session.merge(huella)
+            
+            # Asignar al usuario si se proporcionó user_id
+            if user_id:
+                user = User_iot.query.get(user_id)
+                if user:
+                    user.huella_id = huella_id
+            
             db.session.commit()
             
             return jsonify({
@@ -119,10 +123,9 @@ def listen_fingerprint_result():
     else:
         return jsonify({
             "success": False,
-            "message": f"Registro fallido en ESP32: {message}",
+            "message": f"Registro fallido: {message}",
             "huella_id": huella_id
         }), 200
-
 
 @esp32_bp.route('/listen-rfid', methods=['POST'])
 def listen_rfid_result():
