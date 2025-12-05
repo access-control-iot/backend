@@ -90,12 +90,25 @@ def fingerprint_access():
             "failed_count": failed_count
         }), 403
 
+    # VERIFICAR SI EL USUARIO ESTÁ ACTIVO
+    if not user.isActive:
+        failed_count = _record_failed_attempt(
+            identifier=str(huella_id), 
+            identifier_type='huella', 
+            user_id=user.id,
+            reason='Usuario inactivo'
+        )
+        return jsonify({
+            "success": False,
+            "reason": "Acceso denegado - Usuario inactivo",
+            "trigger_buzzer": (failed_count >= 3),
+            "failed_count": failed_count
+        }), 403
     
     last_access = AccessLog.query.filter(
         AccessLog.user_id == user.id,
         AccessLog.status == 'Permitido'
     ).order_by(AccessLog.timestamp.desc()).first()
-    
     
     if not last_access or last_access.action_type == 'SALIDA':
         action_type = 'ENTRADA'
@@ -103,7 +116,6 @@ def fingerprint_access():
     else:
         action_type = 'SALIDA'
         message = "Salida permitida"
-    
     
     log = AccessLog(
         user_id=user.id,
@@ -151,6 +163,20 @@ def rfid_access():
             "failed_count": failed_count
         }), 403
 
+    # VERIFICAR SI EL USUARIO ESTÁ ACTIVO
+    if not user.isActive:
+        failed_count = _record_failed_attempt(
+            identifier=rfid, 
+            identifier_type='rfid', 
+            user_id=user.id,
+            reason='Usuario inactivo'
+        )
+        return jsonify({
+            "success": False,
+            "reason": "Acceso denegado - Usuario inactivo",
+            "trigger_buzzer": (failed_count >= 3),
+            "failed_count": failed_count
+        }), 403
 
     last_access = AccessLog.query.filter(
         AccessLog.user_id == user.id,
@@ -158,14 +184,12 @@ def rfid_access():
         AccessLog.sensor_type == 'RFID' 
     ).order_by(AccessLog.timestamp.desc()).first()
     
-
     if not last_access or last_access.action_type == 'SALIDA':
         action_type = 'ENTRADA'
         message = "Entrada permitida por RFID"
     else:
         action_type = 'SALIDA'
         message = "Salida permitida por RFID"
-
 
     log = AccessLog(
         user_id=user.id,
@@ -204,7 +228,6 @@ def determinar_accion_usuario(user_id, sensor_type='Huella'):
     
 @bp.route('/secure-zone', methods=['POST'])
 def secure_zone_access():
-
     data = request.get_json() or {}
     huella_id = data.get('huella_id')
     rfid = data.get('rfid')
@@ -215,6 +238,14 @@ def secure_zone_access():
         return jsonify({
             "access": False,
             "reason": "Huella no registrada",
+            "buzzer": "error"
+        }), 403
+
+    # VERIFICAR SI EL USUARIO ESTÁ ACTIVO
+    if not user.isActive:
+        return jsonify({
+            "access": False,
+            "reason": "Usuario inactivo",
             "buzzer": "error"
         }), 403
 
@@ -251,8 +282,6 @@ def secure_zone_access():
         "buzzer": "success",
         "message": "Acceso a zona segura permitido"
     }), 200
-
-
 @bp.route('/fingerprint-attendance', methods=['POST'])
 def fingerprint_attendance():
 
@@ -1022,14 +1051,14 @@ def secure_zone_double_auth():
         log = AccessLog(
             timestamp=datetime.utcnow(),
             sensor_type="ZonaSegura",
-            status="Denegado",  # ¡ESTO ES LO QUE FALTA!
+            status="Denegado",
             huella_id=huella_id if huella_id else None,
             rfid=rfid if rfid else None,
             action_type="INTENTO_ZONA_SEGURA",
             motivo_decision="Faltan credenciales (huella o RFID)"
         )
         db.session.add(log)
-        db.session.commit()  # ¡GUARDAR EL LOG!
+        db.session.commit()
         
         return jsonify({
             "success": False,
@@ -1059,7 +1088,7 @@ def secure_zone_double_auth():
             identifier_type='huella_secure_zone',
             reason='Huella no registrada - Zona Segura'
         )
-        db.session.commit()  # Guardar ambos
+        db.session.commit()
         
         return jsonify({
             "success": False,
@@ -1069,11 +1098,42 @@ def secure_zone_double_auth():
             "tipo": "ZONA_SEGURA_DENEGADA"
         }), 403
     
+    # VERIFICAR SI EL USUARIO ESTÁ ACTIVO
+    if not user.isActive:
+        # CREAR LOG DENEGADO
+        log = AccessLog(
+            user_id=user.id,
+            timestamp=datetime.utcnow(),
+            sensor_type="ZonaSegura",
+            status="Denegado",
+            huella_id=huella_id,
+            rfid=rfid,
+            action_type="INTENTO_ZONA_SEGURA",
+            motivo_decision=f"Usuario inactivo intentó Zona Segura"
+        )
+        db.session.add(log)
+        
+        failed_count = _record_failed_attempt(
+            identifier=str(user.id),
+            identifier_type='secure_zone_inactive',
+            user_id=user.id,
+            reason='Usuario inactivo intentó acceder a Zona Segura'
+        )
+        db.session.commit()
+        
+        return jsonify({
+            "success": False,
+            "reason": "Usuario inactivo - Acceso denegado",
+            "trigger_buzzer": (failed_count >= 2),
+            "failed_count": failed_count,
+            "tipo": "ZONA_SEGURA_DENEGADA"
+        }), 403
+    
     # Verificar que sea ADMINISTRADOR
     if user.role.name != "admin":
         # CREAR LOG DENEGADO
         log = AccessLog(
-            user_id=user.id,  # Aquí SÍ conocemos al usuario
+            user_id=user.id,
             timestamp=datetime.utcnow(),
             sensor_type="ZonaSegura",
             status="Denegado",
@@ -1090,7 +1150,7 @@ def secure_zone_double_auth():
             user_id=user.id,
             reason='Usuario no administrador intentó acceder a Zona Segura'
         )
-        db.session.commit()  # Guardar ambos
+        db.session.commit()
         
         return jsonify({
             "success": False,
@@ -1121,7 +1181,7 @@ def secure_zone_double_auth():
             user_id=user.id,
             reason='RFID no coincide para Zona Segura'
         )
-        db.session.commit()  # Guardar ambos
+        db.session.commit()
         
         return jsonify({
             "success": False,
