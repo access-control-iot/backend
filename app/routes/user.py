@@ -838,27 +838,38 @@ def update_user_complete(user_id):
         print(f"Contraseña actualizada para usuario {user_id}")
     
     # 6. Actualizar rol si se proporciona
-    if "role" in data:
-        role_name = data["role"]
-        role = Role.query.filter_by(name=role_name).first()
-        if not role:
-            return jsonify({
-                "success": False,
-                "msg": f"Rol inválido: {role_name}"
-            }), 400
-        
-        # Validar que no se suspenda al último administrador
-        if user.is_admin and role_name != "admin":
-            admins = User_iot.query.filter_by(is_admin=True, is_active=True).count()
-            if admins <= 1:
+   # 6. Actualizar rol si se proporciona
+if "role" in data:
+    role_name = data["role"]
+    role = Role.query.filter_by(name=role_name).first()
+    if not role:
+        return jsonify({
+            "success": False,
+            "msg": f"Rol inválido: {role_name}"
+        }), 400
+    
+    # Verificar el rol actual del usuario
+    current_role_is_admin = user.role and user.role.name == "admin"
+    new_role_is_admin = role_name == "admin"
+    
+    # Solo validar si está cambiando de admin a no-admin
+    if current_role_is_admin and not new_role_is_admin:
+        # Contar administradores activos (basado en rol, no en propiedad is_admin)
+        admin_role = Role.query.filter_by(name="admin").first()
+        if admin_role:
+            admin_count = User_iot.query.filter_by(
+                role_id=admin_role.id, 
+                is_active=True
+            ).count()
+            
+            if admin_count <= 1:
                 return jsonify({
                     "success": False,
                     "msg": "No se puede cambiar el rol del último administrador activo"
                 }), 400
-        
-        user.role = role
-        print(f"Rol actualizado a {role_name} para usuario {user_id}")
     
+    user.role = role
+    print(f"Rol actualizado a {role_name} para usuario {user_id}")
     try:
         db.session.commit()
         print(f"Usuario {user_id} actualizado exitosamente")
