@@ -531,20 +531,30 @@ def delete_schedule(schedule_id):
     schedule = Schedule.query.get(schedule_id)
     if not schedule:
         return jsonify(msg='Horario no encontrado'), 404
-        
+    
     # Verificar si hay asignaciones activas
     active_us = UserSchedule.query.filter(
         UserSchedule.schedule_id == schedule_id,
         (UserSchedule.end_date == None) | (UserSchedule.end_date >= date.today())
     ).first()
 
-    if active_us:
+    # Si hay asignaciones activas y NO se solicita fuerza, devolver error
+    force = request.args.get('force', 'false').lower() == 'true'
+    
+    if active_us and not force:
         return jsonify(msg='No se puede eliminar: existen asignaciones activas'), 400
 
+    # Si hay asignaciones y se fuerza, eliminarlas primero
+    if active_us and force:
+        UserSchedule.query.filter_by(schedule_id=schedule_id).delete()
+
+    # Eliminar el horario
     db.session.delete(schedule)
     db.session.commit()
 
     admin = _get_user_from_identity(get_jwt_identity())
+    change_type = 'force_delete' if force else 'delete'
     record_audit(schedule_id=schedule_id, admin_id=admin.id if admin else None,
-                 change_type='delete', details=f'Eliminado schedule {schedule_id}')
+                 change_type=change_type, details=f'Eliminado schedule {schedule_id}')
+    
     return jsonify(msg='Horario eliminado'), 200
