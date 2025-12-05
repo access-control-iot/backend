@@ -88,14 +88,14 @@ def check_schedule_status(schedule, dt):
     tolerancia_salida = int(schedule.tolerancia_salida or 0)
     
     minutes_diff_entrada = int((dt - entrada_dt).total_seconds() / 60)
-    minutes_diff_salida = int((dt - salida_dt).total_seconds() / 60)
 
     # Lógica para entrada
     if dt <= entrada_dt + timedelta(minutes=tolerancia_entrada):
         return {'state': 'presente', 'minutes_diff': max(0, minutes_diff_entrada)}
     elif entrada_dt + timedelta(minutes=tolerancia_entrada) < dt < salida_dt:
         return {'state': 'tarde', 'minutes_diff': minutes_diff_entrada}
-    # Lógica para salida (dentro de la tolerancia de salida)
+    # Lógica para salida - MÁS RESTRICTIVA
+    # Solo permitir desde 1 minuto antes y con tolerancia máxima
     elif dt >= salida_dt - timedelta(minutes=1) and dt <= salida_dt + timedelta(minutes=tolerancia_salida):
         return {'state': 'presente', 'minutes_diff': None}
     else:
