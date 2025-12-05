@@ -1008,88 +1008,65 @@ def bulk_activate_users():
     }), 200
 # En user.py, busca las funciones de huella y añade versiones públicas SIN @jwt_required()
 
-@user_bp.route("/huella/public/register", methods=["POST"])
-@cross_origin()
-def register_huella_public():
-    """Endpoint público para registro de huella (para ESP32)"""
+@users_bp.route('/huella/public/register', methods=['POST'])
+def public_register_fingerprint():
+    """Endpoint público para que ESP32 confirme registro de huella"""
     try:
         data = request.get_json() or {}
+        print(f"[PUBLIC REGISTER] Datos recibidos: {data}")
         
-        huella_id = data.get("huella_id")
-        template_b64 = data.get("template")
-        user_id = data.get("user_id")
-        
-        print(f"Registro público huella - huella_id: {huella_id}, user_id: {user_id}")
+        huella_id = data.get('huella_id')
+        user_id = data.get('user_id')
         
         if not huella_id:
             return jsonify(success=False, message="huella_id es requerido"), 400
         
-        try:
-            huella_id = int(huella_id)
-        except:
-            return jsonify(success=False, message="huella_id debe ser entero"), 400
+        from app.models import Huella, User_iot
+        from app import db
         
-        # Verificar si el usuario existe si se proporciona user_id
+        # PASO 1: Primero crear/verificar el registro en la tabla Huella
+        huella_existente = Huella.query.get(huella_id)
+        
+        if not huella_existente:
+            # Crear registro en Huella (template vacío inicialmente)
+            nueva_huella = Huella(id=huella_id, template=b"registered")
+            db.session.add(nueva_huella)
+            db.session.flush()  # Para obtener el ID sin hacer commit
+            print(f"[PUBLIC REGISTER] Registro huella {huella_id} creado en tabla Huella")
+        
+        # PASO 2: Asignar al usuario si existe user_id
         if user_id:
-            try:
-                user_id = int(user_id)
-                user = User_iot.query.get(user_id)
-                if not user:
-                    return jsonify(success=False, message="Usuario no encontrado"), 404
+            usuario = User_iot.query.get(user_id)
+            if usuario:
+                # Si el usuario ya tiene otra huella asignada, primero limpiar
+                if usuario.huella_id and usuario.huella_id != huella_id:
+                    print(f"[PUBLIC REGISTER] Usuario {user_id} tenía huella {usuario.huella_id}, cambiando a {huella_id}")
                 
-                # Verificar si la huella ya está asignada a otro usuario
-                existing_user = User_iot.query.filter_by(huella_id=huella_id).first()
-                if existing_user and existing_user.id != user_id:
-                    return jsonify(success=False, 
-                                  message=f"Huella ya asignada a usuario {existing_user.username}"), 400
-                
-                # Asignar huella al usuario
-                user.huella_id = huella_id
-                
-            except Exception as e:
-                print(f"Error asignando huella a usuario: {str(e)}")
-                # Continuar sin asignar al usuario si hay error
+                usuario.huella_id = huella_id
+                usuario.updated_at = datetime.now()
+                db.session.add(usuario)
         
-        # Manejar el template
-        template_bytes = None
-        if template_b64:
-            try:
-                template_bytes = base64.b64decode(template_b64)
-                print(f"Template recibido, tamaño: {len(template_bytes)} bytes")
-            except Exception as e:
-                print(f"Error decodificando template: {str(e)}")
-                # Crear template vacío si hay error
-                template_bytes = b"registered"
-        else:
-            # Si no hay template, crear uno vacío
-            template_bytes = b"registered"
-        
-        # Crear o actualizar registro de huella
-        huella = Huella.query.get(huella_id)
-        if huella:
-            # Actualizar template si existe
-            if template_bytes:
-                huella.template = template_bytes
-        else:
-            # Crear nuevo registro
-            huella = Huella(id=huella_id, template=template_bytes)
-            db.session.add(huella)
-        
+        # PASO 3: Hacer commit de todos los cambios
         db.session.commit()
+        
+        print(f"[PUBLIC REGISTER] ¡Éxito! Huella {huella_id} registrada para usuario {user_id}")
         
         return jsonify({
             "success": True,
-            "message": "Huella registrada correctamente",
+            "message": f"Huella {huella_id} registrada exitosamente",
             "huella_id": huella_id,
-            "user_id": user_id if user_id else None,
-            "has_template": bool(template_b64)
-        }), 201
+            "user_id": user_id,
+            "timestamp": datetime.now().isoformat()
+        }), 200
         
     except Exception as e:
         db.session.rollback()
-        print(f"Error en registro público de huella: {str(e)}")
-        return jsonify(success=False, message=f"Error del servidor: {str(e)}"), 500
-
+        print(f"[PUBLIC REGISTER ERROR] {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Error del servidor: {str(e)}",
+            "huella_id": data.get('huella_id')
+        }), 500
 @user_bp.route("/huella/public/check/<int:huella_id>", methods=["GET"])
 @cross_origin()
 def check_fingerprint_public(huella_id):
