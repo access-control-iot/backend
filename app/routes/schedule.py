@@ -734,3 +734,27 @@ def update_assignment(assignment_id):
     except Exception as e:
         db.session.rollback()
         return jsonify(success=False, msg=f'Error al actualizar: {str(e)}'), 500
+    
+def horarios_chocan(h1: Schedule, h2: Schedule):
+    """Verifica si dos horarios se superponen en días y horas"""
+    # Convertir días a sets
+    dias1 = set([d.strip() for d in h1.dias.split(",")])
+    dias2 = set([d.strip() for d in h2.dias.split(",")])
+    
+    # Si no tienen días en común, no chocan
+    if dias1.isdisjoint(dias2):
+        return False
+    
+    # Helper para convertir a time
+    def _to_time(t):
+        if isinstance(t, str):
+            return datetime.strptime(t, "%H:%M").time()
+        return t
+    
+    # Obtener horas
+    e1 = _to_time(h1.hora_entrada)
+    s1 = _to_time(h1.hora_salida)
+    e2 = _to_time(h2.hora_entrada)
+    s2 = _to_time(h2.hora_salida)
+    
+    return not (s1 <= e2 or s2 <= e1)
