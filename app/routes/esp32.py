@@ -238,3 +238,41 @@ def proxy_command_to_esp32():
             "success": False,
             "message": f"Error comunicándose con ESP32: {str(e)}"
         }), 500
+@esp32_bp.route('/proxy/status', methods=['POST', 'OPTIONS'])
+def proxy_esp32_status():
+    """Proxy para verificar estado del ESP32"""
+    if request.method == 'OPTIONS':
+        return jsonify({"success": True}), 200
+    
+    data = request.get_json() or {}
+    esp32_ip = data.get('esp32_ip')
+    
+    if not esp32_ip:
+        return jsonify({"success": False, "message": "IP del ESP32 requerida"}), 400
+    
+    try:
+        # Intentar conectar al ESP32
+        response = requests.get(
+            f"http://{esp32_ip}/status",
+            timeout=5
+        )
+        
+        return jsonify({
+            "success": True,
+            "status": "online",
+            "esp32_data": response.json() if response.content else {}
+        }), 200
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "success": True,
+            "status": "offline",
+            "message": "Timeout - ESP32 no responde"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": True,
+            "status": "offline",
+            "message": f"Error de conexión: {str(e)}"
+        }), 200
