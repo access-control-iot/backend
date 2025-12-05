@@ -28,16 +28,46 @@ def _get_user_from_identity(identity):
 
 
 def get_user_schedule(user_id, dt):
-    local_date = dt.astimezone(LIMA_TZ).date() if dt.tzinfo else dt.date()
-    us = UserSchedule.query.filter(
+    """
+    Obtiene el horario activo de un usuario para una fecha específica.
+    Prioriza el horario más reciente si hay múltiples activos.
+    """
+    from app.models import UserSchedule, Schedule
+    
+    # Convertir a fecha local si tiene timezone
+    if dt.tzinfo:
+        local_date = dt.date()
+    else:
+        # Si no tiene timezone, asumir UTC y convertir a Lima
+        try:
+            utc_dt = pytz.utc.localize(dt)
+            lima_dt = utc_dt.astimezone(LIMA_TZ)
+            local_date = lima_dt.date()
+        except:
+            local_date = dt.date()
+    
+    # Obtener TODOS los horarios activos para esta fecha
+    active_schedules = UserSchedule.query.filter(
         UserSchedule.user_id == user_id,
         UserSchedule.start_date <= local_date,
         (UserSchedule.end_date == None) | (UserSchedule.end_date >= local_date)
-    ).first()
-    if not us:
+    ).order_by(UserSchedule.start_date.desc()).all()
+    
+    if not active_schedules:
         return None
-    return Schedule.query.get(us.schedule_id)
-
+    
+    # Si hay múltiples horarios activos, usar el más reciente (por start_date)
+    # Esto maneja el caso donde se cambió de horario durante el día
+    latest_schedule = active_schedules[0]
+    
+    # Verificar si hay un horario que empiece HOY específicamente
+    for schedule in active_schedules:
+        if schedule.start_date == local_date:
+            # Este horario comenzó hoy, tiene prioridad
+            latest_schedule = schedule
+            break
+    
+    return Schedule.query.get(latest_schedule.schedule_id)
 
 def check_schedule_status(schedule, dt):
     if schedule is None:
