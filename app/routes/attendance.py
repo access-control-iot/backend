@@ -362,8 +362,10 @@ def fingerprint_attendance():
                 salida_dt = datetime.combine(lima_now.date(), schedule.hora_salida)
                 salida_dt = LIMA_TZ.localize(salida_dt)
                 
-                # NO permitir salida antes de la hora de salida
-                if lima_now < salida_dt:
+                # NO permitir salida antes de la hora de salida (máximo 1 minuto antes)
+                salida_permitida_desde = salida_dt - timedelta(minutes=1)
+                
+                if lima_now < salida_permitida_desde:
                     # Calcular minutos restantes
                     minutos_restantes = int((salida_dt - lima_now).total_seconds() / 60)
                     return jsonify({
@@ -373,8 +375,29 @@ def fingerprint_attendance():
             
             # Registrar salida
             return register_attendance_exit(user, lima_now)
+        
+        elif action == 'entry_pending_exit':
+            # Tiene entrada abierta pero aún no es hora de salida
+            if schedule:
+                salida_dt = datetime.combine(lima_now.date(), schedule.hora_salida)
+                salida_dt = LIMA_TZ.localize(salida_dt)
+                minutos_restantes = int((salida_dt - lima_now).total_seconds() / 60)
+                
+                return jsonify({
+                    "success": False,
+                    "reason": f"Aún no es hora de salida. Puede registrar salida a partir de las {salida_dt.strftime('%H:%M')} (faltan {minutos_restantes} minutos)",
+                    "has_open_entry": True,
+                    "scheduled_exit_time": salida_dt.strftime('%H:%M'),
+                    "minutes_remaining": minutos_restantes
+                }), 400
+            else:
+                return jsonify({
+                    "success": False,
+                    "reason": "Ya tiene una entrada registrada hoy. No puede registrar otra entrada.",
+                    "has_open_entry": True
+                }), 400
         else:
-            # Es una entrada
+            # Es una entrada nueva
             if not schedule:
                 return jsonify({
                     "success": False,
@@ -398,14 +421,17 @@ def fingerprint_attendance():
                 if schedule:
                     salida_dt = datetime.combine(lima_now.date(), schedule.hora_salida)
                     salida_dt = LIMA_TZ.localize(salida_dt)
+                    salida_permitida_desde = salida_dt - timedelta(minutes=1)
                     
-                    if lima_now >= salida_dt:
-                        # Es hora de salida, cambiar acción a 'exit'
+                    if lima_now >= salida_permitida_desde:
+                        # Es hora de salida, registrar salida
                         return register_attendance_exit(user, lima_now)
                     else:
+                        minutos_restantes = int((salida_dt - lima_now).total_seconds() / 60)
                         return jsonify({
                             "success": False,
-                            "reason": f"Ya tiene entrada registrada hoy. Puede marcar salida a partir de las {salida_dt.strftime('%H:%M')}"
+                            "reason": f"Ya tiene entrada registrada hoy. Puede marcar salida a partir de las {salida_dt.strftime('%H:%M')} (faltan {minutos_restantes} minutos)",
+                            "has_open_entry": True
                         }), 400
             
             # Registrar entrada
