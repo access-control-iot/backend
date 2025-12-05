@@ -48,7 +48,7 @@ def create_user():
     required = ["username", "password", "nombre", "apellido"]
     for field in required:
         if field not in data:
-            jsonify(msg=f"Campo requerido: {field}"), 400
+            return jsonify(msg=f"Campo requerido: {field}"), 400
 
     
     if User_iot.query.filter_by(username=data["username"]).first():
@@ -751,12 +751,13 @@ def list_suspended_users():
 @jwt_required()
 @admin_required
 def update_user_complete(user_id):
+
     user = User_iot.query.get_or_404(user_id)
     data = request.get_json() or {}
     
     print(f"Actualizando usuario {user_id} con datos:", data)
     
-    # 1. Actualizar datos básicos
+
     if "nombre" in data:
         user.nombre = data["nombre"]
     if "apellido" in data:
@@ -838,32 +839,25 @@ def update_user_complete(user_id):
     
     # 6. Actualizar rol si se proporciona
     if "role" in data:
-        # Obtener el rol solicitado
-        role_name = data["role"].strip().lower()
-        
-        # Buscar el rol en la base de datos
+        role_name = data["role"]
         role = Role.query.filter_by(name=role_name).first()
-        if not role:
-            # Intentar con nombres alternativos
-            if role_name == "empleado":
-                role = Role.query.filter_by(name="employee").first()
-            elif role_name == "employee":
-                role = Role.query.filter_by(name="employee").first()
-            elif role_name == "admin" or role_name == "administrador":
-                role = Role.query.filter_by(name="admin").first()
-        
         if not role:
             return jsonify({
                 "success": False,
                 "msg": f"Rol inválido: {role_name}"
             }), 400
         
+        # Validar que no se suspenda al último administrador
+        if user.is_admin and role_name != "admin":
+            admins = User_iot.query.filter_by(is_admin=True, is_active=True).count()
+            if admins <= 1:
+                return jsonify({
+                    "success": False,
+                    "msg": "No se puede cambiar el rol del último administrador activo"
+                }), 400
         
-        # Actualizar el rol del usuario
         user.role = role
-
-        
-        print(f"Rol actualizado a {role.name} para usuario {user_id}")
+        print(f"Rol actualizado a {role_name} para usuario {user_id}")
     
     try:
         db.session.commit()
@@ -898,6 +892,7 @@ def update_user_complete(user_id):
             "success": False,
             "msg": f"Error al actualizar usuario: {str(e)}"
         }), 500
+
 @user_bp.route("/<int:user_id>/remove-huella", methods=["PUT"])
 @jwt_required()
 @admin_required
