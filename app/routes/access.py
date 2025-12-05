@@ -730,25 +730,13 @@ def decidir_accion_automatica(user, timestamp):
                 'hora_actual': timestamp.strftime('%H:%M')
             }
 def get_user_schedule(user_id, dt):
-    """
-    Obtiene el horario activo de un usuario para una fecha específica.
-    Prioriza el horario más reciente si hay múltiples activos.
-    """
+    """Obtiene el horario activo de un usuario para una fecha/hora específica"""
     from app.models import UserSchedule, Schedule
     
-    # Convertir a fecha local si tiene timezone
-    if dt.tzinfo:
-        local_date = dt.date()
-    else:
-        # Si no tiene timezone, asumir UTC y convertir a Lima
-        try:
-            utc_dt = pytz.utc.localize(dt)
-            lima_dt = utc_dt.astimezone(LIMA_TZ)
-            local_date = lima_dt.date()
-        except:
-            local_date = dt.date()
+    # Convertir a fecha local
+    local_date = dt.astimezone(LIMA_TZ).date() if dt.tzinfo else dt.date()
     
-    # Obtener TODOS los horarios activos para esta fecha
+    # Obtener horarios activos ordenados por start_date descendente
     active_schedules = UserSchedule.query.filter(
         UserSchedule.user_id == user_id,
         UserSchedule.start_date <= local_date,
@@ -758,18 +746,13 @@ def get_user_schedule(user_id, dt):
     if not active_schedules:
         return None
     
-    # Si hay múltiples horarios activos, usar el más reciente (por start_date)
-    # Esto maneja el caso donde se cambió de horario durante el día
-    latest_schedule = active_schedules[0]
-    
-    # Verificar si hay un horario que empiece HOY específicamente
+    # Priorizar horario que empiece HOY
     for schedule in active_schedules:
         if schedule.start_date == local_date:
-            # Este horario comenzó hoy, tiene prioridad
-            latest_schedule = schedule
-            break
+            return Schedule.query.get(schedule.schedule_id)
     
-    return Schedule.query.get(latest_schedule.schedule_id)
+    # Si no hay horario que empiece hoy, usar el más reciente
+    return Schedule.query.get(active_schedules[0].schedule_id)
 def determinar_accion_acceso(user_id):
     last_access = AccessLog.query.filter(
         AccessLog.user_id == user_id,
