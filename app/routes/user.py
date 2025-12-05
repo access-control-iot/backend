@@ -439,7 +439,6 @@ def list_all_users():
         "current_page": page
     }), 200
 @user_bp.route("/huella/assign-id", methods=["POST"])
-@jwt_required()
 def assign_huella_id():
     """Asigna un ID de huella disponible a un usuario"""
     data = request.get_json() or {}
@@ -485,7 +484,6 @@ def assign_huella_id():
         "user_id": user_id
     }), 200
 @user_bp.route("/huella/assign-manual", methods=["POST"])
-@jwt_required()
 @admin_required
 def assign_huella_manual():
     data = request.get_json() or {}
