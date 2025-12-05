@@ -39,7 +39,7 @@ class User_iot(db.Model):
     area_trabajo = db.Column(db.String(80), index=True)
     huella_id = db.Column(db.Integer, db.ForeignKey('huella.id', ondelete='SET NULL'), unique=True, nullable=True, index=True)
     huella = db.relationship('Huella', backref='user', uselist=False, passive_deletes=True)
-
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
 
     rfid = db.Column(db.String(64), unique=True, index=True)
 
@@ -58,8 +58,17 @@ class User_iot(db.Model):
             "username": self.username,
             "nombre": self.nombre,
             "apellido": self.apellido,
-            "role": self.role.name if self.role else None
-        }
+            "role": self.role.name if self.role else None,
+            "huella_id": self.huella_id,
+            "rfid": self.rfid,
+            "is_active": self.is_active,  # Agregar esta línea
+            "area_trabajo": self.area_trabajo,
+            "genero": self.genero,
+            "fecha_nacimiento": self.fecha_nacimiento.isoformat() if self.fecha_nacimiento else None,
+            "fecha_contrato": self.fecha_contrato.isoformat() if self.fecha_contrato else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+    }
     @property
     def is_admin(self):
         return self.role is not None and self.role.name == UserRoleEnum.admin.value

@@ -383,6 +383,7 @@ def list_empleados():
         User_iot.query
         .join(Role)
         .filter(Role.name == "empleado")
+        .filter(User_iot.is_active == True) 
         .all()
     )
 
@@ -601,3 +602,318 @@ def get_user(user_id):
         
     except Exception as e:
         return jsonify(msg=f"Error al obtener usuario: {str(e)}"), 500
+    
+
+@user_bp.route("/<int:user_id>/suspend", methods=["POST"])
+@jwt_required()
+@admin_required
+def suspend_user(user_id):
+    """Suspender un usuario (desactivar)"""
+    user = User_iot.query.get_or_404(user_id)
+    
+    # Verificar si es el último administrador
+    if user.is_admin:
+        admins = User_iot.query.filter_by(is_admin=True, is_active=True).count()
+        if admins <= 1:
+            return jsonify(msg="No se puede suspender al último administrador activo"), 400
+    
+    user.is_active = False
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": "Usuario suspendido correctamente",
+        "user_id": user.id,
+        "username": user.username,
+        "is_active": user.is_active
+    }), 200
+
+@user_bp.route("/<int:user_id>/activate", methods=["POST"])
+@jwt_required()
+@admin_required
+def activate_user(user_id):
+    """Activar un usuario suspendido"""
+    user = User_iot.query.get_or_404(user_id)
+    
+    user.is_active = True
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": "Usuario activado correctamente",
+        "user_id": user.id,
+        "username": user.username,
+        "is_active": user.is_active
+    }), 200
+
+@user_bp.route("/<int:user_id>/status", methods=["GET"])
+@jwt_required()
+@admin_required
+def get_user_status(user_id):
+    """Obtener estado del usuario"""
+    user = User_iot.query.get_or_404(user_id)
+    
+    return jsonify({
+        "id": user.id,
+        "username": user.username,
+        "nombre": user.nombre,
+        "apellido": user.apellido,
+        "is_active": user.is_active,
+        "role": user.role.name if user.role else None
+    }), 200
+
+@user_bp.route("/active", methods=["GET"])
+@jwt_required()
+@admin_required
+def list_active_users():
+    """Listar usuarios activos"""
+    users = User_iot.query.filter_by(is_active=True).all()
+    
+    users_data = [
+        {
+            "id": u.id,
+            "username": u.username,
+            "nombre": u.nombre,
+            "apellido": u.apellido,
+            "role": u.role.name if u.role else None,
+            "area_trabajo": u.area_trabajo,
+            "huella_id": u.huella_id,
+            "rfid": u.rfid,
+            "is_active": u.is_active
+        }
+        for u in users
+    ]
+    
+    return jsonify({
+        "users": users_data,
+        "total": len(users_data)
+    }), 200
+
+@user_bp.route("/suspended", methods=["GET"])
+@jwt_required()
+@admin_required
+def list_suspended_users():
+    """Listar usuarios suspendidos"""
+    users = User_iot.query.filter_by(is_active=False).all()
+    
+    users_data = [
+        {
+            "id": u.id,
+            "username": u.username,
+            "nombre": u.nombre,
+            "apellido": u.apellido,
+            "role": u.role.name if u.role else None,
+            "area_trabajo": u.area_trabajo,
+            "huella_id": u.huella_id,
+            "rfid": u.rfid,
+            "is_active": u.is_active,
+            "suspended_since": u.updated_at.isoformat() if u.updated_at else None
+        }
+        for u in users
+    ]
+    
+    return jsonify({
+        "users": users_data,
+        "total": len(users_data)
+    }), 200
+
+@user_bp.route("/<int:user_id>/update-complete", methods=["PUT"])
+@jwt_required()
+@admin_required
+def update_user_complete(user_id):
+    """Actualización completa de usuario incluyendo huella y RFID"""
+    user = User_iot.query.get_or_404(user_id)
+    data = request.get_json() or {}
+    
+    # 1. Actualizar datos personales básicos
+    if "nombre" in data:
+        user.nombre = data["nombre"]
+    if "apellido" in data:
+        user.apellido = data["apellido"]
+    if "genero" in data:
+        user.genero = data["genero"]
+    if "fecha_nacimiento" in data:
+        user.fecha_nacimiento = parse_date(data["fecha_nacimiento"])
+    if "fecha_contrato" in data:
+        user.fecha_contrato = parse_date(data["fecha_contrato"])
+    if "area_trabajo" in data:
+        user.area_trabajo = data["area_trabajo"]
+    
+    # 2. Actualizar RFID con validación
+    if "rfid" in data:
+        new_rfid = data["rfid"]
+        if new_rfid:  # Si se quiere asignar un nuevo RFID
+            existing = User_iot.query.filter_by(rfid=new_rfid).first()
+            if existing and existing.id != user_id:
+                return jsonify(msg="Este RFID ya pertenece a otro usuario"), 400
+            user.rfid = new_rfid
+        else:  # Si se quiere eliminar el RFID
+            user.rfid = None
+    
+    # 3. Actualizar huella con validación
+    if "huella_id" in data:
+        new_huella_id = data["huella_id"]
+        if new_huella_id is not None:
+            try:
+                new_huella_id = int(new_huella_id)
+                # Verificar si ya está asignada a otro usuario
+                existing = User_iot.query.filter_by(huella_id=new_huella_id).first()
+                if existing and existing.id != user_id:
+                    return jsonify(msg="Esta huella ya está asignada a otro usuario"), 400
+                
+                # Verificar si existe el registro de huella
+                huella_record = Huella.query.get(new_huella_id)
+                if not huella_record:
+                    # Crear registro de huella vacío si no existe
+                    huella_record = Huella(id=new_huella_id, template=b"")
+                    db.session.add(huella_record)
+                
+                user.huella_id = new_huella_id
+            except ValueError:
+                return jsonify(msg="huella_id debe ser un número entero"), 400
+        else:  # Eliminar asignación de huella
+            user.huella_id = None
+    
+    # 4. Actualizar contraseña si se proporciona
+    if "password" in data and data["password"]:
+        user.set_password(data["password"])
+    
+    # 5. Actualizar rol si se proporciona
+    if "role" in data:
+        role_name = data["role"]
+        role = Role.query.filter_by(name=role_name).first()
+        if not role:
+            return jsonify(msg=f"Rol inválido: {role_name}"), 400
+        
+        # Validar que no se suspenda al último administrador
+        if user.is_admin and role_name != "admin":
+            admins = User_iot.query.filter_by(is_admin=True, is_active=True).count()
+            if admins <= 1:
+                return jsonify(msg="No se puede cambiar el rol del último administrador activo"), 400
+        
+        user.role = role
+    
+    try:
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "message": "Usuario actualizado completamente",
+            "user": user.as_dict()
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify(msg=f"Error al actualizar usuario: {str(e)}"), 500
+
+@user_bp.route("/<int:user_id>/remove-huella", methods=["PUT"])
+@jwt_required()
+@admin_required
+def remove_user_huella(user_id):
+    """Eliminar la asignación de huella de un usuario"""
+    user = User_iot.query.get_or_404(user_id)
+    
+    user.huella_id = None
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": "Huella desasignada correctamente",
+        "user_id": user.id,
+        "huella_id": None
+    }), 200
+
+@user_bp.route("/<int:user_id>/remove-rfid", methods=["PUT"])
+@jwt_required()
+@admin_required
+def remove_user_rfid(user_id):
+    """Eliminar la asignación de RFID de un usuario"""
+    user = User_iot.query.get_or_404(user_id)
+    
+    user.rfid = None
+    db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": "RFID desasignado correctamente",
+        "user_id": user.id,
+        "rfid": None
+    }), 200
+
+@user_bp.route("/bulk-suspend", methods=["POST"])
+@jwt_required()
+@admin_required
+def bulk_suspend_users():
+    """Suspender múltiples usuarios a la vez"""
+    data = request.get_json() or {}
+    user_ids = data.get("user_ids", [])
+    
+    if not user_ids:
+        return jsonify(msg="Se requiere lista de user_ids"), 400
+    
+    suspended = []
+    failed = []
+    
+    for user_id in user_ids:
+        user = User_iot.query.get(user_id)
+        if user:
+            # Verificar si es el último administrador
+            if user.is_admin:
+                admins = User_iot.query.filter_by(is_admin=True, is_active=True).count()
+                if admins <= 1:
+                    failed.append({
+                        "user_id": user_id,
+                        "reason": "Es el último administrador activo"
+                    })
+                    continue
+            
+            user.is_active = False
+            suspended.append(user_id)
+        else:
+            failed.append({
+                "user_id": user_id,
+                "reason": "Usuario no encontrado"
+            })
+    
+    if suspended:
+        db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": f"{len(suspended)} usuarios suspendidos, {len(failed)} fallidos",
+        "suspended": suspended,
+        "failed": failed
+    }), 200
+
+@user_bp.route("/bulk-activate", methods=["POST"])
+@jwt_required()
+@admin_required
+def bulk_activate_users():
+    """Activar múltiples usuarios a la vez"""
+    data = request.get_json() or {}
+    user_ids = data.get("user_ids", [])
+    
+    if not user_ids:
+        return jsonify(msg="Se requiere lista de user_ids"), 400
+    
+    activated = []
+    failed = []
+    
+    for user_id in user_ids:
+        user = User_iot.query.get(user_id)
+        if user:
+            user.is_active = True
+            activated.append(user_id)
+        else:
+            failed.append({
+                "user_id": user_id,
+                "reason": "Usuario no encontrado"
+            })
+    
+    if activated:
+        db.session.commit()
+    
+    return jsonify({
+        "success": True,
+        "message": f"{len(activated)} usuarios activados, {len(failed)} fallidos",
+        "activated": activated,
+        "failed": failed
+    }), 200
