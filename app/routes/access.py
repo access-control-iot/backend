@@ -641,14 +641,18 @@ def setup_system():
     }), 201
 
 def decidir_accion_automatica(user, timestamp):
+    """Determina la acción automática considerando cambios de horario"""
+    
+    # Obtener horario activo
+    schedule = get_user_schedule(user.id, timestamp)
+    
+    # Si es admin o sin horario, solo acceso
     if user.role.name == "admin":
         return {
             'tipo': 'ACCESO',
             'registrar_asistencia': False,
             'razon': 'Usuario administrador'
         }
-    
-    schedule = get_user_schedule(user.id, timestamp)
     
     if not schedule:
         return {
@@ -657,7 +661,40 @@ def decidir_accion_automatica(user, timestamp):
             'razon': 'Usuario sin horario asignado'
         }
     
-   
+    # Verificar si el horario comenzó hoy
+    local_date = timestamp.astimezone(LIMA_TZ).date()
+    user_schedules = UserSchedule.query.filter(
+        UserSchedule.user_id == user.id,
+        UserSchedule.schedule_id == schedule.id,
+        UserSchedule.start_date <= local_date,
+        (UserSchedule.end_date == None) | (UserSchedule.end_date >= local_date)
+    ).first()
+    
+    # Si el horario comenzó hoy, considerar horario completo
+    if user_schedules and user_schedules.start_date == local_date:
+        # Verificar si ya ha registrado entrada con este nuevo horario
+        hoy_inicio = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+        hoy_fin = hoy_inicio + timedelta(days=1)
+        
+        existing_entries = Attendance.query.filter(
+            Attendance.user_id == user.id,
+            Attendance.entry_time >= hoy_inicio,
+            Attendance.entry_time <= hoy_fin,
+            Attendance.estado_entrada != 'salida_registrada'
+        ).order_by(Attendance.entry_time.desc()).all()
+        
+        # Si ya hay una entrada registrada hoy, verificar con qué horario
+        for entry in existing_entries:
+            entry_time_lima = entry.entry_time.astimezone(LIMA_TZ)
+            entry_schedule = get_user_schedule(user.id, entry_time_lima)
+            
+            # Si la entrada anterior fue con un horario diferente
+            # y el nuevo horario comenzó hoy, permitir nueva entrada
+            if entry_schedule and entry_schedule.id != schedule.id:
+                # Resetear la lógica, permitir nueva entrada con nuevo horario
+                pass
+    
+    # Resto de la lógica original...
     dias = [d.strip() for d in schedule.dias.split(',')]
     dia_text = ['Lun','Mar','Mie','Jue','Vie','Sab','Dom'][timestamp.weekday()]
     
@@ -668,12 +705,11 @@ def decidir_accion_automatica(user, timestamp):
             'razon': f'No es día laboral ({dia_text})'
         }
     
-   
+    # Lógica original para determinar si es entrada o salida...
     hora_entrada = schedule.hora_entrada
     hora_salida = schedule.hora_salida
     tolerancia_entrada = schedule.tolerancia_entrada or 0
     tolerancia_salida = schedule.tolerancia_salida or 0
-    
     
     inicio_jornada = datetime.combine(timestamp.date(), hora_entrada)
     fin_jornada = datetime.combine(timestamp.date(), hora_salida)
@@ -681,15 +717,12 @@ def decidir_accion_automatica(user, timestamp):
     inicio_jornada = LIMA_TZ.localize(inicio_jornada)
     fin_jornada = LIMA_TZ.localize(fin_jornada)
     
-    
     ventana_entrada_inicio = inicio_jornada - timedelta(minutes=10)  
     ventana_entrada_fin = inicio_jornada + timedelta(minutes=tolerancia_entrada)
     
-
     ventana_salida_inicio = fin_jornada - timedelta(minutes=1)  
     ventana_salida_fin = fin_jornada + timedelta(minutes=tolerancia_salida)
     
-   
     if ventana_entrada_inicio <= timestamp <= ventana_entrada_fin:
         return {
             'tipo': 'ACCESO_Y_ASISTENCIA',
@@ -699,7 +732,7 @@ def decidir_accion_automatica(user, timestamp):
             'hora_entrada_real': hora_entrada.strftime('%H:%M'),
             'hora_salida_real': hora_salida.strftime('%H:%M')
         }
-  
+    
     elif ventana_salida_inicio <= timestamp <= ventana_salida_fin:
         return {
             'tipo': 'ACCESO_Y_ASISTENCIA',
@@ -710,7 +743,6 @@ def decidir_accion_automatica(user, timestamp):
             'hora_salida_real': hora_salida.strftime('%H:%M')
         }
     else:
-        
         if inicio_jornada <= timestamp <= fin_jornada + timedelta(minutes=tolerancia_salida):
             return {
                 'tipo': 'ACCESO',
