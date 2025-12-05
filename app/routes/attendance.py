@@ -66,7 +66,7 @@ def check_schedule_status(schedule, dt):
     elif entrada_dt + timedelta(minutes=tolerancia_entrada) < dt < salida_dt:
         return {'state': 'tarde', 'minutes_diff': minutes_diff_entrada}
     # Lógica para salida (dentro de la tolerancia de salida)
-    elif dt >= salida_dt - timedelta(minutes=5) and dt <= salida_dt + timedelta(minutes=tolerancia_salida):
+    elif dt >= salida_dt - timedelta(minutes=1) and dt <= salida_dt + timedelta(minutes=tolerancia_salida):
         return {'state': 'presente', 'minutes_diff': None}
     else:
         return {'state': 'fuera_de_horario', 'minutes_diff': None}
@@ -130,7 +130,7 @@ def determine_attendance_action(user_id, current_time):
             minutos_antes_salida = int((salida_con_tolerancia - current_time).total_seconds() / 60)
             
             # Permitir salida desde 5 minutos antes de la hora de salida
-            if minutos_antes_salida <= 5:
+            if minutos_antes_salida <= 1:
                 return 'exit'
             else:
                 return 'entry'  # Aún no es hora de salida
