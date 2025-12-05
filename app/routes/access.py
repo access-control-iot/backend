@@ -961,3 +961,102 @@ def auto_access():
     
     print(f"DEBUG: Respuesta final: {response}")
     return jsonify(response), 200
+@bp.route('/secure-zone/double-auth', methods=['POST'])
+def secure_zone_double_auth():
+    """
+    Endpoint para acceso a Zona Segura (solo administradores con doble factor)
+    Requiere: huella_id Y rfid simultáneamente
+    """
+    data = request.get_json() or {}
+    
+    huella_id = data.get('huella_id')
+    rfid = data.get('rfid')
+    
+    # Verificar que vengan ambos
+    if not huella_id or not rfid:
+        return jsonify({
+            "success": False,
+            "reason": "Se requieren huella y RFID simultáneamente",
+            "trigger_buzzer": False,
+            "tipo": "ZONA_SEGURA_DENEGADA"
+        }), 400
+    
+    # Buscar usuario por huella
+    user = User_iot.query.filter_by(huella_id=huella_id).first()
+    
+    if not user:
+        failed_count = _record_failed_attempt(
+            identifier=str(huella_id),
+            identifier_type='huella_secure_zone',
+            reason='Huella no registrada - Zona Segura'
+        )
+        return jsonify({
+            "success": False,
+            "reason": "Huella no autorizada para Zona Segura",
+            "trigger_buzzer": (failed_count >= 2),
+            "failed_count": failed_count,
+            "tipo": "ZONA_SEGURA_DENEGADA"
+        }), 403
+    
+    # Verificar que sea ADMINISTRADOR
+    if user.role.name != "admin":
+        failed_count = _record_failed_attempt(
+            identifier=str(user.id),
+            identifier_type='secure_zone_admin',
+            user_id=user.id,
+            reason='Usuario no administrador intentó acceder a Zona Segura'
+        )
+        return jsonify({
+            "success": False,
+            "reason": "Solo administradores pueden acceder a Zona Segura",
+            "trigger_buzzer": (failed_count >= 2),
+            "failed_count": failed_count,
+            "tipo": "ZONA_SEGURA_DENEGADA"
+        }), 403
+    
+    # Verificar que el RFID coincida con el usuario
+    if user.rfid != rfid:
+        failed_count = _record_failed_attempt(
+            identifier=str(user.id),
+            identifier_type='secure_zone_rfid_mismatch',
+            user_id=user.id,
+            reason='RFID no coincide para Zona Segura'
+        )
+        return jsonify({
+            "success": False,
+            "reason": "RFID no válido para Zona Segura",
+            "trigger_buzzer": (failed_count >= 2),
+            "failed_count": failed_count,
+            "tipo": "ZONA_SEGURA_DENEGADA"
+        }), 403
+    
+    # ¡TODO CORRECTO! Crear log de acceso especial
+    timestamp = datetime.utcnow()
+    
+    log = AccessLog(
+        user_id=user.id,
+        timestamp=timestamp,
+        sensor_type="ZonaSegura",
+        status="Permitido",
+        huella_id=huella_id,
+        rfid=rfid,
+        action_type="ENTRADA_ZONA_SEGURA",
+        motivo_decision="Acceso doble factor exitoso - Administrador"
+    )
+    db.session.add(log)
+    db.session.commit()
+    
+    # Respuesta especial para Zona Segura
+    return jsonify({
+        "success": True,
+        "tipo": "ZONA_SEGURA",
+        "message": "ACCESO ZONA SEGURA AUTORIZADO",
+        "user_id": user.id,
+        "nombre": user.nombre,
+        "apellido": user.apellido,
+        "access_action": "ENTRADA_ZONA_SEGURA",
+        "registrar_asistencia": False,
+        "decision_razon": "Acceso administrador con doble factor",
+        "requires_special_action": True,  # Para que ESP32 haga algo especial
+        "zona_segura": True
+    }), 200
