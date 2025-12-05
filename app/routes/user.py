@@ -837,37 +837,39 @@ def update_user_complete(user_id):
         user.set_password(data["password"])
         print(f"Contraseña actualizada para usuario {user_id}")
     
-  if "role" in data:
-    role_name = data["role"]
-    role = Role.query.filter_by(name=role_name).first()
-    if not role:
-        return jsonify({
-            "success": False,
-            "msg": f"Rol inválido: {role_name}"
-        }), 400
+    # 6. Actualizar rol si se proporciona
+    if "role" in data:
+        role_name = data["role"]
+        role = Role.query.filter_by(name=role_name).first()
+        if not role:
+            return jsonify({
+                "success": False,
+                "msg": f"Rol inválido: {role_name}"
+            }), 400
+        
+        # Verificar el rol actual del usuario
+        current_role_is_admin = user.role and user.role.name == "admin"
+        new_role_is_admin = role_name == "admin"
+        
+        # Solo validar si está cambiando de admin a no-admin
+        if current_role_is_admin and not new_role_is_admin:
+            # Contar administradores activos (basado en rol, no en propiedad is_admin)
+            admin_role = Role.query.filter_by(name="admin").first()
+            if admin_role:
+                admin_count = User_iot.query.filter_by(
+                    role_id=admin_role.id, 
+                    is_active=True
+                ).count()
+                
+                if admin_count <= 1:
+                    return jsonify({
+                        "success": False,
+                        "msg": "No se puede cambiar el rol del último administrador activo"
+                    }), 400
+        
+        user.role = role
+        print(f"Rol actualizado a {role_name} para usuario {user_id}")
     
-    # Verificar el rol actual del usuario
-    current_role_is_admin = user.role and user.role.name == "admin"
-    new_role_is_admin = role_name == "admin"
-    
-    # Solo validar si está cambiando de admin a no-admin
-    if current_role_is_admin and not new_role_is_admin:
-        # Contar administradores activos (basado en rol, no en propiedad is_admin)
-        admin_role = Role.query.filter_by(name="admin").first()
-        if admin_role:
-            admin_count = User_iot.query.filter_by(
-                role_id=admin_role.id, 
-                is_active=True
-            ).count()
-            
-            if admin_count <= 1:
-                return jsonify({
-                    "success": False,
-                    "msg": "No se puede cambiar el rol del último administrador activo"
-                }), 400
-    
-    user.role = role
-    print(f"Rol actualizado a {role_name} para usuario {user_id}")
     try:
         db.session.commit()
         print(f"Usuario {user_id} actualizado exitosamente")
@@ -901,7 +903,6 @@ def update_user_complete(user_id):
             "success": False,
             "msg": f"Error al actualizar usuario: {str(e)}"
         }), 500
-
 @user_bp.route("/<int:user_id>/remove-huella", methods=["PUT"])
 @jwt_required()
 @admin_required
