@@ -558,9 +558,6 @@ def delete_schedule(schedule_id):
                  change_type=change_type, details=f'Eliminado schedule {schedule_id}')
     
     return jsonify(msg='Horario eliminado'), 200
-@schedule_bp.route('/assignments', methods=['GET'])
-@jwt_required()
-@admin_required
 def list_all_assignments():
     """Lista todas las asignaciones de horarios a usuarios"""
     try:
@@ -569,12 +566,16 @@ def list_all_assignments():
         schedule_id = request.args.get('schedule_id', type=int)
         active_only = request.args.get('active_only', 'false').lower() == 'true'
         
-        query = UserSchedule.query
+        query = db.session.query(UserSchedule, User_iot, Schedule).join(
+            User_iot, UserSchedule.user_id == User_iot.id
+        ).join(
+            Schedule, UserSchedule.schedule_id == Schedule.id
+        )
         
         if user_id:
-            query = query.filter_by(user_id=user_id)
+            query = query.filter(UserSchedule.user_id == user_id)
         if schedule_id:
-            query = query.filter_by(schedule_id=schedule_id)
+            query = query.filter(UserSchedule.schedule_id == schedule_id)
             
         # Filtrar solo activas si se solicita
         if active_only:
@@ -583,13 +584,10 @@ def list_all_assignments():
                 (UserSchedule.end_date == None) | (UserSchedule.end_date >= today)
             )
         
-        assignments = query.order_by(UserSchedule.start_date.desc()).all()
+        results = query.order_by(UserSchedule.start_date.desc()).all()
         
         result = []
-        for assignment in assignments:
-            user = assignment.user
-            schedule = assignment.schedule
-            
+        for assignment, user, schedule in results:
             result.append({
                 'assignment_id': assignment.id,
                 'user_id': user.id,
@@ -613,7 +611,6 @@ def list_all_assignments():
             'success': False,
             'msg': f'Error al obtener asignaciones: {str(e)}'
         }), 500
-
 @schedule_bp.route('/assignments/<int:assignment_id>', methods=['GET'])
 @jwt_required()
 @admin_required
