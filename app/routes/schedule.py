@@ -558,3 +558,179 @@ def delete_schedule(schedule_id):
                  change_type=change_type, details=f'Eliminado schedule {schedule_id}')
     
     return jsonify(msg='Horario eliminado'), 200
+@schedule_bp.route('/assignments', methods=['GET'])
+@jwt_required()
+@admin_required
+def list_all_assignments():
+    """Lista todas las asignaciones de horarios a usuarios"""
+    try:
+        # Opcional: filtros por query params
+        user_id = request.args.get('user_id', type=int)
+        schedule_id = request.args.get('schedule_id', type=int)
+        active_only = request.args.get('active_only', 'false').lower() == 'true'
+        
+        query = UserSchedule.query
+        
+        if user_id:
+            query = query.filter_by(user_id=user_id)
+        if schedule_id:
+            query = query.filter_by(schedule_id=schedule_id)
+            
+        # Filtrar solo activas si se solicita
+        if active_only:
+            today = date.today()
+            query = query.filter(
+                (UserSchedule.end_date == None) | (UserSchedule.end_date >= today)
+            )
+        
+        assignments = query.order_by(UserSchedule.start_date.desc()).all()
+        
+        result = []
+        for assignment in assignments:
+            user = assignment.user
+            schedule = assignment.schedule
+            
+            result.append({
+                'assignment_id': assignment.id,
+                'user_id': user.id,
+                'user_name': f'{user.nombre} {user.apellido}',
+                'username': user.username,
+                'schedule_id': schedule.id,
+                'schedule_name': schedule.nombre,
+                'start_date': assignment.start_date.isoformat() if assignment.start_date else None,
+                'end_date': assignment.end_date.isoformat() if assignment.end_date else None,
+                'is_active': assignment.end_date is None or assignment.end_date >= date.today()
+            })
+        
+        return jsonify({
+            'success': True,
+            'assignments': result,
+            'total_count': len(result)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'msg': f'Error al obtener asignaciones: {str(e)}'
+        }), 500
+
+@schedule_bp.route('/assignments/<int:assignment_id>', methods=['GET'])
+@jwt_required()
+@admin_required
+def get_assignment(assignment_id):
+    """Obtiene una asignación específica por su ID"""
+    assignment = UserSchedule.query.get(assignment_id)
+    if not assignment:
+        return jsonify(success=False, msg='Asignación no encontrada'), 404
+    
+    user = assignment.user
+    schedule = assignment.schedule
+    
+    return jsonify({
+        'success': True,
+        'assignment': {
+            'id': assignment.id,
+            'user_id': user.id,
+            'user_name': f'{user.nombre} {user.apellido}',
+            'username': user.username,
+            'schedule_id': schedule.id,
+            'schedule_name': schedule.nombre,
+            'schedule_details': {
+                'hora_entrada': schedule.hora_entrada.strftime('%H:%M'),
+                'hora_salida': schedule.hora_salida.strftime('%H:%M'),
+                'dias': schedule.dias,
+                'tipo': schedule.tipo
+            },
+            'start_date': assignment.start_date.isoformat() if assignment.start_date else None,
+            'end_date': assignment.end_date.isoformat() if assignment.end_date else None,
+            'is_active': assignment.end_date is None or assignment.end_date >= date.today()
+        }
+    }), 200
+@schedule_bp.route('/assignments/<int:assignment_id>', methods=['PUT'])
+@jwt_required()
+@admin_required
+def update_assignment(assignment_id):
+    """Actualiza una asignación existente"""
+    assignment = UserSchedule.query.get(assignment_id)
+    if not assignment:
+        return jsonify(success=False, msg='Asignación no encontrada'), 404
+    
+    data = request.get_json() or {}
+    
+    # Validar datos mínimos
+    if not data:
+        return jsonify(success=False, msg='Datos requeridos'), 400
+    
+    try:
+        cambios = []
+        
+        # Manejar schedule_id si se quiere cambiar
+        if 'schedule_id' in data:
+            new_schedule_id = int(data['schedule_id'])
+            if new_schedule_id != assignment.schedule_id:
+                new_schedule = Schedule.query.get(new_schedule_id)
+                if not new_schedule:
+                    return jsonify(success=False, msg='Nuevo horario no encontrado'), 404
+                
+                # Verificar conflictos con el nuevo horario
+                existing_schedules = UserSchedule.query.filter(
+                    UserSchedule.user_id == assignment.user_id,
+                    UserSchedule.id != assignment.id,  # Excluir esta asignación
+                    UserSchedule.start_date <= (assignment.end_date or date.max),
+                    or_(
+                        UserSchedule.end_date == None,
+                        UserSchedule.end_date >= assignment.start_date
+                    )
+                ).all()
+                
+                for us in existing_schedules:
+                    if horarios_chocan(new_schedule, us.schedule):
+                        return jsonify(success=False, 
+                                     msg="El usuario ya tiene otro horario que se cruza con este"), 400
+                
+                old_schedule_name = assignment.schedule.nombre
+                new_schedule_name = new_schedule.nombre
+                assignment.schedule_id = new_schedule_id
+                cambios.append(f"schedule: {old_schedule_name} -> {new_schedule_name}")
+        
+        # Manejar fechas
+        if 'start_date' in data:
+            new_start = parse_date_str(data['start_date'])
+            if new_start != assignment.start_date:
+                cambios.append(f"start_date: {assignment.start_date} -> {new_start}")
+                assignment.start_date = new_start
+        
+        if 'end_date' in data:
+            new_end = parse_date_str(data['end_date']) if data['end_date'] else None
+            if new_end != assignment.end_date:
+                cambios.append(f"end_date: {assignment.end_date} -> {new_end}")
+                assignment.end_date = new_end
+        
+        # Validar que start_date <= end_date si ambos existen
+        if assignment.end_date and assignment.start_date > assignment.end_date:
+            return jsonify(success=False, 
+                         msg='La fecha de inicio no puede ser posterior a la fecha de fin'), 400
+        
+        db.session.commit()
+        
+        # Registrar auditoría
+        admin = _get_user_from_identity(get_jwt_identity())
+        record_audit(
+            schedule_id=assignment.schedule_id,
+            user_id=assignment.user_id,
+            admin_id=admin.id if admin else None,
+            change_type='update_assignment',
+            details='; '.join(cambios) if cambios else 'sin cambios'
+        )
+        
+        return jsonify({
+            'success': True,
+            'msg': 'Asignación actualizada',
+            'changes': cambios
+        }), 200
+        
+    except (TypeError, ValueError) as e:
+        return jsonify(success=False, msg=f'Datos inválidos: {str(e)}'), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify(success=False, msg=f'Error al actualizar: {str(e)}'), 500
