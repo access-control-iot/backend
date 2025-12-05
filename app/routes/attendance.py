@@ -246,7 +246,6 @@ def register_attendance_exit(user, timestamp):
 
 
 def register_attendance_from_access(access_log: AccessLog):
-   
     if not access_log or not access_log.user_id:
         return {'ok': False, 'reason': 'Datos insuficientes'}
 
@@ -256,7 +255,6 @@ def register_attendance_from_access(access_log: AccessLog):
     lima_dt = ts.astimezone(LIMA_TZ)
 
     user_id = access_log.user_id
-    
     
     hoy = lima_dt.replace(hour=0, minute=0, second=0, microsecond=0)
     mañana = hoy + timedelta(days=1)
@@ -269,16 +267,30 @@ def register_attendance_from_access(access_log: AccessLog):
         Attendance.exit_time.is_(None)
     ).first()
     
-  
     schedule = get_user_schedule(user_id, lima_dt)
     schedule_info = check_schedule_status(schedule, lima_dt) if schedule else {'state': 'sin_horario', 'minutes_diff': None}
     
     if open_att:
+        # Verificar si es hora de salida antes de registrar
+        if schedule:
+            salida_dt = datetime.combine(lima_dt.date(), schedule.hora_salida)
+            salida_dt = LIMA_TZ.localize(salida_dt)
+            salida_permitida_desde = salida_dt - timedelta(minutes=1)
+            
+            if lima_dt < salida_permitida_desde:
+                # Aún no es hora de salida
+                return {
+                    'ok': False, 
+                    'reason': f'Aún no es hora de salida. Hora de salida: {salida_dt.strftime("%H:%M")}',
+                    'action': 'exit_denied',
+                    'scheduled_exit_time': salida_dt.strftime('%H:%M'),
+                    'has_open_entry': True
+                }
         
+        # Registrar salida
         open_att.exit_time = access_log.timestamp
         db.session.commit()
         
-       
         duracion = open_att.exit_time - open_att.entry_time
         horas = int(duracion.total_seconds() // 3600)
         minutos = int((duracion.total_seconds() % 3600) // 60)
@@ -294,7 +306,31 @@ def register_attendance_from_access(access_log: AccessLog):
             'exit_time': access_log.timestamp
         }
     else:
+        # Verificar si ya tiene entrada hoy
+        existing_entry = Attendance.query.filter(
+            Attendance.user_id == user_id,
+            Attendance.entry_time >= hoy,
+            Attendance.entry_time < mañana
+        ).first()
         
+        if existing_entry:
+            # Ya tiene entrada, no puede registrar otra
+            if schedule:
+                salida_dt = datetime.combine(lima_dt.date(), schedule.hora_salida)
+                salida_dt = LIMA_TZ.localize(salida_dt)
+                return {
+                    'ok': False,
+                    'reason': f'Ya tiene entrada registrada hoy. Puede marcar salida a partir de las {salida_dt.strftime("%H:%M")}',
+                    'has_open_entry': True
+                }
+            else:
+                return {
+                    'ok': False,
+                    'reason': 'Ya tiene una entrada registrada hoy',
+                    'has_open_entry': True
+                }
+        
+        # Registrar nueva entrada
         estado = schedule_info.get('state') or 'sin_horario'
         att = Attendance(
             user_id=user_id, 
@@ -312,7 +348,6 @@ def register_attendance_from_access(access_log: AccessLog):
             'estado': estado,
             'minutes_diff': schedule_info.get('minutes_diff')
         }
-
 
 @bp.route('/fingerprint-attendance', methods=['POST'])
 def fingerprint_attendance():
