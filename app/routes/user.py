@@ -753,13 +753,13 @@ def list_suspended_users():
 @jwt_required()
 @admin_required
 def update_user_complete(user_id):
-    """Actualización completa de usuario incluyendo huella y RFID"""
+
     user = User_iot.query.get_or_404(user_id)
     data = request.get_json() or {}
     
     print(f"Actualizando usuario {user_id} con datos:", data)
     
-    # 1. Actualizar datos personales básicos
+
     if "nombre" in data:
         user.nombre = data["nombre"]
     if "apellido" in data:
@@ -798,9 +798,11 @@ def update_user_complete(user_id):
                         "msg": "Este RFID ya pertenece a otro usuario"
                     }), 400
                 user.rfid = new_rfid
+                print(f"RFID actualizado: {new_rfid} para usuario {user_id}")
         else:  # Si se quiere eliminar el RFID
             user.rfid = None
-    
+            print(f"RFID eliminado para usuario {user_id}")
+        
     # 4. Actualizar huella con validación
     if "huella_id" in data:
         new_huella_id = data["huella_id"]
