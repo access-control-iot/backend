@@ -405,7 +405,39 @@ def list_empleados():
         "users": users_data,
         "total": len(users_data)
     }), 200
-
+@user_bp.route("/all", methods=["GET"])
+@jwt_required()
+@admin_required
+def list_all_users():
+    """Listar TODOS los usuarios (activos e inactivos)"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    
+    users = User_iot.query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    users_data = [
+        {
+            "id": u.id,
+            "username": u.username,
+            "nombre": u.nombre,
+            "apellido": u.apellido,
+            "role": u.role.name if u.role else None,
+            "area_trabajo": u.area_trabajo,
+            "huella_id": u.huella_id,
+            "rfid": u.rfid,
+            "is_active": u.is_active,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "updated_at": u.updated_at.isoformat() if u.updated_at else None
+        }
+        for u in users.items
+    ]
+    
+    return jsonify({
+        "users": users_data,
+        "total": users.total,
+        "pages": users.pages,
+        "current_page": page
+    }), 200
 @user_bp.route("/huella/assign-id", methods=["POST"])
 @jwt_required()
 def assign_huella_id():
