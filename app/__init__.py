@@ -19,7 +19,7 @@ def create_app():
 
 
     CORS(app, supports_credentials=True)
-    from app.routes.auth import bp as auth_bp
+    from app.routes.auth import auth_bp  
     from app.routes.access import bp as access_bp
     from app.routes.attendance import bp as attendance_bp
     from app.routes.user import user_bp
