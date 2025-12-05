@@ -141,34 +141,30 @@ def determine_attendance_action(user_id, current_time):
         Attendance.exit_time.is_(None)
     ).first()
     
-    # Si hay entrada abierta, verificar si ya es hora de salida
-    if open_attendance:
-        # Obtener el horario del usuario para esta fecha
-        schedule = get_user_schedule(user_id, current_time)
-        
-        if schedule:
-            # Calcular la hora de salida con tolerancia
-            salida_dt = datetime.combine(current_time.date(), schedule.hora_salida)
-            salida_dt = LIMA_TZ.localize(salida_dt)
-            
-            # Añadir tolerancia de salida
-            tolerancia_salida = int(schedule.tolerancia_salida or 0)
-            salida_con_tolerancia = salida_dt + timedelta(minutes=tolerancia_salida)
-            
-            # NO permitir salida antes de la hora de salida
-            # Solo permitir cuando ya sea la hora de salida o después (con tolerancia)
-            if current_time >= salida_dt:
-                return 'exit'
-            else:
-                # Aún no es hora de salida, debe ser una entrada nueva
-                return 'entry'
-        else:
-            # Sin horario, permitir salida si hay entrada abierta
-            return 'exit'
-    else:
-        # No hay entrada abierta, es una entrada
+    # Si NO hay entrada abierta, es una ENTRADA
+    if not open_attendance:
         return 'entry'
-
+    
+    # Si hay entrada abierta, verificar si es hora de salida
+    schedule = get_user_schedule(user_id, current_time)
+    
+    if schedule:
+        # Calcular la hora de salida exacta (sin tolerancia para salidas tempranas)
+        salida_dt = datetime.combine(current_time.date(), schedule.hora_salida)
+        salida_dt = LIMA_TZ.localize(salida_dt)
+        
+        # ¡IMPORTANTE! NO permitir salida antes de la hora exacta de salida
+        # Solo permitir desde 1 minuto antes como máximo
+        salida_permitida_desde = salida_dt - timedelta(minutes=1)
+        
+        if current_time >= salida_permitida_desde:
+            return 'exit'
+        else:
+            # Aún no es hora de salida, mostrar error
+            return 'entry_pending_exit'  # Estado especial
+    
+    # Sin horario, permitir salida si hay entrada abierta
+    return 'exit'
 
 def register_attendance_entry(user, timestamp, schedule_status):
    
