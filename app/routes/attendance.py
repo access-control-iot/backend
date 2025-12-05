@@ -125,15 +125,13 @@ def determine_attendance_action(user_id, current_time):
             tolerancia_salida = int(schedule.tolerancia_salida or 0)
             salida_con_tolerancia = salida_dt + timedelta(minutes=tolerancia_salida)
             
-            # Si la hora actual es 5 minutos o menos antes de la hora de salida,
-            # o ya pasó la hora de salida, permitir la salida
-            minutos_antes_salida = int((salida_con_tolerancia - current_time).total_seconds() / 60)
-            
-            # Permitir salida desde 5 minutos antes de la hora de salida
-            if minutos_antes_salida <= 1:
+            # NO permitir salida antes de la hora de salida
+            # Solo permitir cuando ya sea la hora de salida o después (con tolerancia)
+            if current_time >= salida_dt:
                 return 'exit'
             else:
-                return 'entry'  # Aún no es hora de salida
+                # Aún no es hora de salida, debe ser una entrada nueva
+                return 'entry'
         else:
             # Sin horario, permitir salida si hay entrada abierta
             return 'exit'
@@ -333,20 +331,18 @@ def fingerprint_attendance():
                     "reason": "No tiene una entrada registrada para hoy"
                 }), 400
             
-            # Verificar si es hora de salida
+            # Verificar si es hora de salida (no permitir antes)
             if schedule:
                 salida_dt = datetime.combine(lima_now.date(), schedule.hora_salida)
                 salida_dt = LIMA_TZ.localize(salida_dt)
-                tolerancia_salida = int(schedule.tolerancia_salida or 0)
-                salida_con_tolerancia = salida_dt + timedelta(minutes=tolerancia_salida)
                 
-                minutos_antes_salida = int((salida_con_tolerancia - lima_now).total_seconds() / 60)
-                
-                # Solo permitir salida desde 5 minutos antes
-                if minutos_antes_salida > 5:
+                # NO permitir salida antes de la hora de salida
+                if lima_now < salida_dt:
+                    # Calcular minutos restantes
+                    minutos_restantes = int((salida_dt - lima_now).total_seconds() / 60)
                     return jsonify({
                         "success": False,
-                        "reason": f"No es hora de salida. Puede registrar salida desde {salida_dt - timedelta(minutes=5)}"
+                        "reason": f"No es hora de salida. Puede registrar salida a partir de las {salida_dt.strftime('%H:%M')} (faltan {minutos_restantes} minutos)"
                     }), 400
             
             # Registrar salida
@@ -372,10 +368,19 @@ def fingerprint_attendance():
             ).first()
             
             if existing_entry:
-                return jsonify({
-                    "success": False,
-                    "reason": "Ya tiene una entrada registrada hoy"
-                }), 400
+                # Si ya tiene entrada, verificar si puede salir
+                if schedule:
+                    salida_dt = datetime.combine(lima_now.date(), schedule.hora_salida)
+                    salida_dt = LIMA_TZ.localize(salida_dt)
+                    
+                    if lima_now >= salida_dt:
+                        # Es hora de salida, cambiar acción a 'exit'
+                        return register_attendance_exit(user, lima_now)
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "reason": f"Ya tiene entrada registrada hoy. Puede marcar salida a partir de las {salida_dt.strftime('%H:%M')}"
+                        }), 400
             
             # Registrar entrada
             return register_attendance_entry(user, lima_now, schedule_status)
