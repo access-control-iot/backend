@@ -4,7 +4,8 @@ from app.models import User_iot
 from app.services.jwt_service import generate_token, decode_token
 from app.utils.helpers import validate_user_credentials
 from app import db
-bp = Blueprint('auth', __name__, url_prefix='/auth')
+auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
+
 
 
 @bp.route('/register', methods=['POST'])
