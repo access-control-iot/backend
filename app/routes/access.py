@@ -974,6 +974,19 @@ def secure_zone_double_auth():
     
     # Verificar que vengan ambos
     if not huella_id or not rfid:
+        # CREAR LOG DENEGADO
+        log = AccessLog(
+            timestamp=datetime.utcnow(),
+            sensor_type="ZonaSegura",
+            status="Denegado",  # ¡ESTO ES LO QUE FALTA!
+            huella_id=huella_id if huella_id else None,
+            rfid=rfid if rfid else None,
+            action_type="INTENTO_ZONA_SEGURA",
+            motivo_decision="Faltan credenciales (huella o RFID)"
+        )
+        db.session.add(log)
+        db.session.commit()  # ¡GUARDAR EL LOG!
+        
         return jsonify({
             "success": False,
             "reason": "Se requieren huella y RFID simultáneamente",
@@ -985,11 +998,25 @@ def secure_zone_double_auth():
     user = User_iot.query.filter_by(huella_id=huella_id).first()
     
     if not user:
+        # CREAR LOG DENEGADO
+        log = AccessLog(
+            timestamp=datetime.utcnow(),
+            sensor_type="ZonaSegura",
+            status="Denegado",
+            huella_id=huella_id,
+            rfid=rfid,
+            action_type="INTENTO_ZONA_SEGURA",
+            motivo_decision="Huella no registrada en sistema"
+        )
+        db.session.add(log)
+        
         failed_count = _record_failed_attempt(
             identifier=str(huella_id),
             identifier_type='huella_secure_zone',
             reason='Huella no registrada - Zona Segura'
         )
+        db.session.commit()  # Guardar ambos
+        
         return jsonify({
             "success": False,
             "reason": "Huella no autorizada para Zona Segura",
@@ -1000,12 +1027,27 @@ def secure_zone_double_auth():
     
     # Verificar que sea ADMINISTRADOR
     if user.role.name != "admin":
+        # CREAR LOG DENEGADO
+        log = AccessLog(
+            user_id=user.id,  # Aquí SÍ conocemos al usuario
+            timestamp=datetime.utcnow(),
+            sensor_type="ZonaSegura",
+            status="Denegado",
+            huella_id=huella_id,
+            rfid=rfid,
+            action_type="INTENTO_ZONA_SEGURA",
+            motivo_decision=f"Usuario no administrador ({user.role.name}) intentó Zona Segura"
+        )
+        db.session.add(log)
+        
         failed_count = _record_failed_attempt(
             identifier=str(user.id),
             identifier_type='secure_zone_admin',
             user_id=user.id,
             reason='Usuario no administrador intentó acceder a Zona Segura'
         )
+        db.session.commit()  # Guardar ambos
+        
         return jsonify({
             "success": False,
             "reason": "Solo administradores pueden acceder a Zona Segura",
@@ -1016,12 +1058,27 @@ def secure_zone_double_auth():
     
     # Verificar que el RFID coincida con el usuario
     if user.rfid != rfid:
+        # CREAR LOG DENEGADO
+        log = AccessLog(
+            user_id=user.id,
+            timestamp=datetime.utcnow(),
+            sensor_type="ZonaSegura",
+            status="Denegado",
+            huella_id=huella_id,
+            rfid=rfid,
+            action_type="INTENTO_ZONA_SEGURA",
+            motivo_decision=f"RFID no coincide. Esperado: {user.rfid}, Recibido: {rfid}"
+        )
+        db.session.add(log)
+        
         failed_count = _record_failed_attempt(
             identifier=str(user.id),
-            identifier_type='secure_zone',
+            identifier_type='secure_zone_rfid_mismatch',
             user_id=user.id,
             reason='RFID no coincide para Zona Segura'
         )
+        db.session.commit()  # Guardar ambos
+        
         return jsonify({
             "success": False,
             "reason": "RFID no válido para Zona Segura",
@@ -1057,6 +1114,6 @@ def secure_zone_double_auth():
         "access_action": "ENTRADA_ZONA_SEGURA",
         "registrar_asistencia": False,
         "decision_razon": "Acceso administrador con doble factor",
-        "requires_special_action": True,  # Para que ESP32 haga algo especial
+        "requires_special_action": True,
         "zona_segura": True
     }), 200
