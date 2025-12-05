@@ -1018,7 +1018,7 @@ def secure_zone_double_auth():
     if user.rfid != rfid:
         failed_count = _record_failed_attempt(
             identifier=str(user.id),
-            identifier_type='secure_zone_rfid_mismatch',
+            identifier_type='secure_zone',
             user_id=user.id,
             reason='RFID no coincide para Zona Segura'
         )
