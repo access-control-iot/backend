@@ -83,6 +83,33 @@ def record_audit(schedule_id=None, user_id=None, admin_id=None, change_type='', 
     return a
 
 
+def horarios_chocan(h1: Schedule, h2: Schedule):
+    """Verifica si dos horarios se superponen en días y horas"""
+    # Convertir días a sets
+    dias1 = set([d.strip() for d in h1.dias.split(",")])
+    dias2 = set([d.strip() for d in h2.dias.split(",")])
+    
+    # Si no tienen días en común, no chocan
+    if dias1.isdisjoint(dias2):
+        return False
+    
+    # Helper para convertir a time
+    def _to_time(t):
+        if isinstance(t, str):
+            return datetime.strptime(t, "%H:%M").time()
+        return t
+    
+    # Obtener horas
+    e1 = _to_time(h1.hora_entrada)
+    s1 = _to_time(h1.hora_salida)
+    e2 = _to_time(h2.hora_entrada)
+    s2 = _to_time(h2.hora_salida)
+    
+    # Verificar superposición (si un horario termina después de que el otro comienza)
+    # Asumiendo que los horarios no se cruzan si s1 <= e2 o s2 <= e1
+    return not (s1 <= e2 or s2 <= e1)
+
+
 @schedule_bp.route('/', methods=['POST'])
 @jwt_required()
 @admin_required
@@ -131,6 +158,10 @@ def create_schedule():
 @jwt_required()
 @admin_required
 def assign_schedule():
+    """
+    Asigna un horario a un usuario.
+    Funciona para usuarios de CUALQUIER ROL (admin, empleado, etc.)
+    """
     data = request.get_json() or {}
     try:
         user_id = int(data.get('user_id'))
@@ -153,6 +184,7 @@ def assign_schedule():
     if not schedule:
         return jsonify(msg='Schedule no existe'), 404
 
+    # Buscar asignaciones existentes para el usuario en el rango de fechas
     existing_schedules = UserSchedule.query.filter(
         UserSchedule.user_id == user_id,
         UserSchedule.start_date <= (end_date or date.max),
@@ -162,32 +194,17 @@ def assign_schedule():
         )
     ).all()
 
-    def _to_time(t):
-        if isinstance(t, str):
-            return datetime.strptime(t, "%H:%M").time()
-        return t
-
-    def horarios_chocan(h1: Schedule, h2: Schedule):
-        dias1 = set([d.strip() for d in h1.dias.split(",")])
-        dias2 = set([d.strip() for d in h2.dias.split(",")])
-        if dias1.isdisjoint(dias2):
-            return False
-
-        e1 = _to_time(h1.hora_entrada)
-        s1 = _to_time(h1.hora_salida)
-        e2 = _to_time(h2.hora_entrada)
-        s2 = _to_time(h2.hora_salida)
-
-        return not (s1 <= e2 or s2 <= e1)
-
+    # Verificar conflictos con horarios existentes
     for us in existing_schedules:
         if horarios_chocan(schedule, us.schedule):
             # Si se está asignando para hoy y hay conflicto, terminar el horario anterior
             if immediate_effect and us.end_date is None:
                 us.end_date = today
+                db.session.commit()
             else:
                 return jsonify(msg="El usuario ya tiene un horario asignado que se cruza en días y horas"), 400
 
+    # Crear nueva asignación
     us = UserSchedule(
         user_id=user_id,
         schedule_id=schedule_id,
@@ -198,7 +215,7 @@ def assign_schedule():
     db.session.commit()
 
     admin = _get_user_from_identity(get_jwt_identity())
-    details = f'Asignado schedule {schedule_id} a user {user_id} desde {start_date} hasta {end_date}'
+    details = f'Asignado schedule {schedule_id} a user {user_id} ({user.role}) desde {start_date} hasta {end_date}'
     record_audit(schedule_id=schedule_id, user_id=user_id, admin_id=admin.id if admin else None,
                  change_type='assign', details=details)
 
@@ -208,361 +225,25 @@ def assign_schedule():
         pass
 
     return jsonify({
-        'msg': 'Horario asignado',
+        'msg': 'Horario asignado exitosamente',
         'immediate_effect': immediate_effect,
         'schedule_name': schedule.nombre,
+        'user_name': f'{user.nombre} {user.apellido}',
+        'user_role': user.role,
         'start_date': start_date.isoformat()
     }), 201
 
 
-@schedule_bp.route('/<int:schedule_id>', methods=['PUT'])
+@schedule_bp.route('/assignments', methods=['GET'])
 @jwt_required()
 @admin_required
-def update_schedule(schedule_id):
-    schedule = Schedule.query.get(schedule_id)
-    if not schedule:
-        return jsonify(msg='Horario no encontrado'), 404
-        
-    data = request.get_json() or {}
-    cambios = []
-
-    for field in ['nombre', 'hora_entrada', 'tolerancia_entrada', 'hora_salida',
-                  'tolerancia_salida', 'dias', 'tipo']:
-
-        if field not in data:
-            continue
-
-        new = data[field]
-        old = getattr(schedule, field)
-
-        if new is None or (isinstance(new, str) and new.strip() == ""):
-            return jsonify(msg=f"Valor inválido para {field}", detail="No puede estar vacío"), 400
-
-        try:
-            if field in ['hora_entrada', 'hora_salida']:
-                new_parsed = parse_time_str(new)
-                setattr(schedule, field, new_parsed)
-                cambios.append(f"{field}: {old} -> {new_parsed}")
-            elif field in ['tolerancia_entrada', 'tolerancia_salida']:
-                new_int = int(new)
-                setattr(schedule, field, new_int)
-                cambios.append(f"{field}: {old} -> {new_int}")
-            elif field == 'dias':
-                new_days = validate_days(new)
-                setattr(schedule, field, new_days)
-                cambios.append(f"{field}: {old} -> {new_days}")
-            elif field == 'tipo':
-                new_tipo = validate_tipo(new)
-                setattr(schedule, field, new_tipo)
-                cambios.append(f"{field}: {old} -> {new_tipo}")
-            else:
-                setattr(schedule, field, new)
-                cambios.append(f"{field}: {old} -> {new}")
-        except ValueError as e:
-            return jsonify(msg=f"Valor inválido para {field}", detail=str(e)), 400
-
-    db.session.commit()
-    admin = _get_user_from_identity(get_jwt_identity())
-    record_audit(
-        schedule_id=schedule.id,
-        admin_id=admin.id if admin else None,
-        change_type='update',
-        details='; '.join(cambios) or 'sin cambios'
-    )
-    return jsonify(msg='Horario actualizado'), 200
-
-
-@schedule_bp.route('/<int:schedule_id>/force', methods=['DELETE', 'OPTIONS'])
-@jwt_required()
-@admin_required
-def force_delete_schedule(schedule_id):
-    """Elimina el horario y todas sus asignaciones"""
-    # Manejar preflight request
-    if request.method == 'OPTIONS':
-        return jsonify({'msg': 'OK'}), 200
-    
-    schedule = Schedule.query.get(schedule_id)
-    if not schedule:
-        return jsonify(msg='Horario no encontrado'), 404
-        
-    try:
-        # 1. Eliminar todas las asignaciones primero
-        UserSchedule.query.filter_by(schedule_id=schedule_id).delete()
-        
-        # 2. Ahora eliminar el horario
-        db.session.delete(schedule)
-        db.session.commit()
-        
-        admin = _get_user_from_identity(get_jwt_identity())
-        record_audit(schedule_id=schedule_id, admin_id=admin.id if admin else None,
-                    change_type='force_delete', details=f'Eliminado forzado schedule {schedule_id} con todas sus asignaciones')
-        
-        return jsonify({
-            'success': True,
-            'msg': 'Horario y asignaciones eliminados correctamente'
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({
-            'success': False,
-            'msg': f'Error al eliminar: {str(e)}'
-        }), 500
-
-
-@schedule_bp.route('/<int:schedule_id>/reassign', methods=['POST', 'OPTIONS'])
-@jwt_required()
-@admin_required
-def reassign_and_delete_schedule(schedule_id):
-    """Reasigna usuarios a otro horario y luego elimina"""
-    # Manejar preflight request
-    if request.method == 'OPTIONS':
-        return jsonify({'msg': 'OK'}), 200
-    
-    data = request.get_json() or {}
-    
-    # Validar datos
-    if not data:
-        return jsonify(success=False, msg='Datos JSON requeridos'), 400
-        
-    new_schedule_id = data.get('new_schedule_id')
-    if not new_schedule_id:
-        return jsonify(success=False, msg='Se requiere nuevo horario (new_schedule_id)'), 400
-        
-    try:
-        schedule = Schedule.query.get(schedule_id)
-        if not schedule:
-            return jsonify(success=False, msg='Horario no encontrado'), 404
-            
-        new_schedule = Schedule.query.get(new_schedule_id)
-        if not new_schedule:
-            return jsonify(success=False, msg='Nuevo horario no encontrado'), 404
-            
-        # 1. Reasignar todos los usuarios
-        assignments = UserSchedule.query.filter_by(schedule_id=schedule_id).all()
-        reassigned = 0
-        
-        for assignment in assignments:
-            assignment.schedule_id = new_schedule_id
-            reassigned += 1
-        
-        # 2. Eliminar el horario original
-        db.session.delete(schedule)
-        db.session.commit()
-        
-        admin = _get_user_from_identity(get_jwt_identity())
-        record_audit(
-            schedule_id=schedule_id,
-            admin_id=admin.id if admin else None,
-            change_type='reassign_delete',
-            details=f'Reasignados {reassigned} usuarios a schedule {new_schedule_id} y eliminado schedule {schedule_id}'
-        )
-        
-        return jsonify({
-            'success': True,
-            'msg': f'Horario eliminado y {reassigned} usuarios reasignados',
-            'reassigned_count': reassigned
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({
-            'success': False,
-            'msg': f'Error en reasignación: {str(e)}'
-        }), 500
-@schedule_bp.route('/<int:schedule_id>/end-assignments', methods=['POST', 'OPTIONS'])
-@jwt_required()
-@admin_required
-def end_schedule_assignments(schedule_id):
-    """Termina todas las asignaciones del horario (cambia fecha fin a hoy)"""
-    # Manejar preflight request
-    if request.method == 'OPTIONS':
-        return jsonify({'msg': 'OK'}), 200
-    
-    try:
-        schedule = Schedule.query.get(schedule_id)
-        if not schedule:
-            return jsonify(success=False, msg='Horario no encontrado'), 404
-            
-        # Cambiar fecha fin de todas las asignaciones activas a hoy
-        today = date.today()
-        assignments = UserSchedule.query.filter(
-            UserSchedule.schedule_id == schedule_id,
-            (UserSchedule.end_date == None) | (UserSchedule.end_date >= today)
-        ).all()
-        
-        ended_count = 0
-        for assignment in assignments:
-            assignment.end_date = today
-            ended_count += 1
-        
-        db.session.commit()
-        
-        admin = _get_user_from_identity(get_jwt_identity())
-        record_audit(
-            schedule_id=schedule_id,
-            admin_id=admin.id if admin else None,
-            change_type='end_assignments',
-            details=f'Terminadas {ended_count} asignaciones del schedule {schedule_id}'
-        )
-        
-        return jsonify({
-            'success': True,
-            'msg': f'Terminadas {ended_count} asignaciones',
-            'ended_count': ended_count
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({
-            'success': False,
-            'msg': f'Error terminando asignaciones: {str(e)}'
-        }), 500
-
-
-
-@schedule_bp.route('/<int:schedule_id>/assignments', methods=['GET', 'OPTIONS'])
-@jwt_required()
-@admin_required
-def get_schedule_assignments(schedule_id):
-    """Obtiene todas las asignaciones de un horario"""
-    # Manejar preflight request
-    if request.method == 'OPTIONS':
-        return jsonify({'msg': 'OK'}), 200
-    
-    schedule = Schedule.query.get(schedule_id)
-    if not schedule:
-        return jsonify(success=False, msg='Horario no encontrado'), 404
-        
-    assignments = UserSchedule.query.filter_by(schedule_id=schedule_id).all()
-    result = []
-    
-    for assignment in assignments:
-        user = assignment.user
-        result.append({
-            'user_id': user.id,
-            'user_name': f'{user.nombre} {user.apellido}',
-            'username': user.username,
-            'start_date': assignment.start_date.isoformat() if assignment.start_date else None,
-            'end_date': assignment.end_date.isoformat() if assignment.end_date else None,
-            'is_active': assignment.end_date is None or assignment.end_date >= date.today()
-        })
-    
-    return jsonify({
-        'success': True,
-        'schedule_id': schedule_id,
-        'schedule_name': schedule.nombre,
-        'assignments': result,
-        'total_count': len(result),
-        'active_count': len([a for a in result if a['is_active']])
-    }), 200
-@schedule_bp.route('/audit', methods=['GET'])
-@jwt_required()
-@admin_required
-def schedule_audit():
-    audits = ScheduleAudit.query.order_by(ScheduleAudit.timestamp.desc()).all()
-    result = []
-    for a in audits:
-        result.append({
-            'id': a.id,
-            'schedule_id': a.schedule_id,
-            'user_id': a.user_id,
-            'admin_id': a.admin_id,
-            'timestamp': a.timestamp.isoformat(),
-            'change_type': a.change_type,
-            'details': a.details
-        })
-    return jsonify(result), 200
-
-
-@schedule_bp.route('/', methods=['GET'])
-@jwt_required()
-@admin_required
-def list_schedules():
-    schedules = Schedule.query.order_by(Schedule.nombre).all()
-    result = []
-    for s in schedules:
-        result.append({
-            'id': s.id,
-            'nombre': s.nombre,
-            'hora_entrada': s.hora_entrada.strftime('%H:%M'),
-            'tolerancia_entrada': s.tolerancia_entrada,
-            'hora_salida': s.hora_salida.strftime('%H:%M'),
-            'tolerancia_salida': s.tolerancia_salida,
-            'dias': s.dias,
-            'tipo': s.tipo
-        })
-    return jsonify(result), 200
-
-
-@schedule_bp.route('/my', methods=['GET'])
-@jwt_required()
-def get_my_schedule():
-    identity = get_jwt_identity()
-    user = _get_user_from_identity(identity)
-
-    if not user:
-        return jsonify(msg="Usuario no encontrado"), 404
-
-    user_schedules = UserSchedule.query.filter_by(user_id=user.id).all()
-
-    result = []
-    for us in user_schedules:
-        s = us.schedule
-        result.append({
-            "schedule_id": s.id,
-            "nombre": s.nombre,
-            "hora_entrada": s.hora_entrada.strftime('%H:%M'),
-            "tolerancia_entrada": s.tolerancia_entrada,
-            "hora_salida": s.hora_salida.strftime('%H:%M'),
-            "tolerancia_salida": s.tolerancia_salida,
-            "dias": s.dias,
-            "tipo": s.tipo,
-            "start_date": us.start_date.isoformat() if us.start_date else None,
-            "end_date": us.end_date.isoformat() if us.end_date else None
-        })
-
-    return jsonify(result), 200
-@schedule_bp.route('/<int:schedule_id>', methods=['DELETE'])
-@jwt_required()
-@admin_required
-def delete_schedule(schedule_id):
-    schedule = Schedule.query.get(schedule_id)
-    if not schedule:
-        return jsonify(msg='Horario no encontrado'), 404
-    
-    # Verificar si hay asignaciones activas
-    active_us = UserSchedule.query.filter(
-        UserSchedule.schedule_id == schedule_id,
-        (UserSchedule.end_date == None) | (UserSchedule.end_date >= date.today())
-    ).first()
-
-    # Si hay asignaciones activas y NO se solicita fuerza, devolver error
-    force = request.args.get('force', 'false').lower() == 'true'
-    
-    if active_us and not force:
-        return jsonify(msg='No se puede eliminar: existen asignaciones activas'), 400
-
-    # Si hay asignaciones y se fuerza, eliminarlas primero
-    if active_us and force:
-        UserSchedule.query.filter_by(schedule_id=schedule_id).delete()
-
-    # Eliminar el horario
-    db.session.delete(schedule)
-    db.session.commit()
-
-    admin = _get_user_from_identity(get_jwt_identity())
-    change_type = 'force_delete' if force else 'delete'
-    record_audit(schedule_id=schedule_id, admin_id=admin.id if admin else None,
-                 change_type=change_type, details=f'Eliminado schedule {schedule_id}')
-    
-    return jsonify(msg='Horario eliminado'), 200
 def list_all_assignments():
-    """Lista todas las asignaciones de horarios a usuarios"""
+    """Lista todas las asignaciones de horarios a usuarios (de todos los roles)"""
     try:
         # Opcional: filtros por query params
         user_id = request.args.get('user_id', type=int)
         schedule_id = request.args.get('schedule_id', type=int)
+        role = request.args.get('role')  # Filtrar por rol
         active_only = request.args.get('active_only', 'false').lower() == 'true'
         
         query = db.session.query(UserSchedule, User_iot, Schedule).join(
@@ -575,6 +256,8 @@ def list_all_assignments():
             query = query.filter(UserSchedule.user_id == user_id)
         if schedule_id:
             query = query.filter(UserSchedule.schedule_id == schedule_id)
+        if role:
+            query = query.filter(User_iot.role == role)
             
         # Filtrar solo activas si se solicita
         if active_only:
@@ -583,15 +266,16 @@ def list_all_assignments():
                 (UserSchedule.end_date == None) | (UserSchedule.end_date >= today)
             )
         
-        results = query.order_by(UserSchedule.start_date.desc()).all()
+        results = query.order_by(User_iot.role, UserSchedule.start_date.desc()).all()
         
-        result = []
+        assignments = []
         for assignment, user, schedule in results:
-            result.append({
+            assignments.append({
                 'assignment_id': assignment.id,
                 'user_id': user.id,
                 'user_name': f'{user.nombre} {user.apellido}',
                 'username': user.username,
+                'role': user.role,  # Incluir rol del usuario
                 'schedule_id': schedule.id,
                 'schedule_name': schedule.nombre,
                 'start_date': assignment.start_date.isoformat() if assignment.start_date else None,
@@ -601,8 +285,13 @@ def list_all_assignments():
         
         return jsonify({
             'success': True,
-            'assignments': result,
-            'total_count': len(result)
+            'assignments': assignments,
+            'total_count': len(assignments),
+            'roles_summary': {
+                'admins': len([a for a in assignments if a['role'] == 'admin']),
+                'empleados': len([a for a in assignments if a['role'] == 'empleado']),
+                'otros': len([a for a in assignments if a['role'] not in ['admin', 'empleado']])
+            }
         }), 200
         
     except Exception as e:
@@ -610,6 +299,8 @@ def list_all_assignments():
             'success': False,
             'msg': f'Error al obtener asignaciones: {str(e)}'
         }), 500
+
+
 @schedule_bp.route('/assignments/<int:assignment_id>', methods=['GET'])
 @jwt_required()
 @admin_required
@@ -629,6 +320,7 @@ def get_assignment(assignment_id):
             'user_id': user.id,
             'user_name': f'{user.nombre} {user.apellido}',
             'username': user.username,
+            'role': user.role,  # Incluir rol
             'schedule_id': schedule.id,
             'schedule_name': schedule.nombre,
             'schedule_details': {
@@ -642,11 +334,13 @@ def get_assignment(assignment_id):
             'is_active': assignment.end_date is None or assignment.end_date >= date.today()
         }
     }), 200
+
+
 @schedule_bp.route('/assignments/<int:assignment_id>', methods=['PUT'])
 @jwt_required()
 @admin_required
 def update_assignment(assignment_id):
-    """Actualiza una asignación existente"""
+    """Actualiza una asignación existente (para usuarios de cualquier rol)"""
     assignment = UserSchedule.query.get(assignment_id)
     if not assignment:
         return jsonify(success=False, msg='Asignación no encontrada'), 404
@@ -722,7 +416,8 @@ def update_assignment(assignment_id):
         return jsonify({
             'success': True,
             'msg': 'Asignación actualizada',
-            'changes': cambios
+            'changes': cambios,
+            'user_role': assignment.user.role  # Mostrar rol del usuario
         }), 200
         
     except (TypeError, ValueError) as e:
@@ -730,27 +425,409 @@ def update_assignment(assignment_id):
     except Exception as e:
         db.session.rollback()
         return jsonify(success=False, msg=f'Error al actualizar: {str(e)}'), 500
+
+
+@schedule_bp.route('/<int:schedule_id>', methods=['PUT'])
+@jwt_required()
+@admin_required
+def update_schedule(schedule_id):
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+        
+    data = request.get_json() or {}
+    cambios = []
+
+    for field in ['nombre', 'hora_entrada', 'tolerancia_entrada', 'hora_salida',
+                  'tolerancia_salida', 'dias', 'tipo']:
+
+        if field not in data:
+            continue
+
+        new = data[field]
+        old = getattr(schedule, field)
+
+        if new is None or (isinstance(new, str) and new.strip() == ""):
+            return jsonify(msg=f"Valor inválido para {field}", detail="No puede estar vacío"), 400
+
+        try:
+            if field in ['hora_entrada', 'hora_salida']:
+                new_parsed = parse_time_str(new)
+                setattr(schedule, field, new_parsed)
+                cambios.append(f"{field}: {old} -> {new_parsed}")
+            elif field in ['tolerancia_entrada', 'tolerancia_salida']:
+                new_int = int(new)
+                setattr(schedule, field, new_int)
+                cambios.append(f"{field}: {old} -> {new_int}")
+            elif field == 'dias':
+                new_days = validate_days(new)
+                setattr(schedule, field, new_days)
+                cambios.append(f"{field}: {old} -> {new_days}")
+            elif field == 'tipo':
+                new_tipo = validate_tipo(new)
+                setattr(schedule, field, new_tipo)
+                cambios.append(f"{field}: {old} -> {new_tipo}")
+            else:
+                setattr(schedule, field, new)
+                cambios.append(f"{field}: {old} -> {new}")
+        except ValueError as e:
+            return jsonify(msg=f"Valor inválido para {field}", detail=str(e)), 400
+
+    db.session.commit()
+    admin = _get_user_from_identity(get_jwt_identity())
+    record_audit(
+        schedule_id=schedule.id,
+        admin_id=admin.id if admin else None,
+        change_type='update',
+        details='; '.join(cambios) or 'sin cambios'
+    )
+    return jsonify(msg='Horario actualizado'), 200
+
+
+@schedule_bp.route('/<int:schedule_id>/force', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+@admin_required
+def force_delete_schedule(schedule_id):
+    """Elimina el horario y todas sus asignaciones (para todos los usuarios)"""
+    if request.method == 'OPTIONS':
+        return jsonify({'msg': 'OK'}), 200
     
-def horarios_chocan(h1: Schedule, h2: Schedule):
-    """Verifica si dos horarios se superponen en días y horas"""
-    # Convertir días a sets
-    dias1 = set([d.strip() for d in h1.dias.split(",")])
-    dias2 = set([d.strip() for d in h2.dias.split(",")])
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+        
+    try:
+        # Contar asignaciones afectadas (de todos los roles)
+        affected_assignments = UserSchedule.query.filter_by(schedule_id=schedule_id).count()
+        affected_users = db.session.query(User_iot).join(
+            UserSchedule, UserSchedule.user_id == User_iot.id
+        ).filter(UserSchedule.schedule_id == schedule_id).all()
+        
+        # 1. Eliminar todas las asignaciones primero
+        UserSchedule.query.filter_by(schedule_id=schedule_id).delete()
+        
+        # 2. Ahora eliminar el horario
+        db.session.delete(schedule)
+        db.session.commit()
+        
+        admin = _get_user_from_identity(get_jwt_identity())
+        record_audit(schedule_id=schedule_id, admin_id=admin.id if admin else None,
+                    change_type='force_delete', 
+                    details=f'Eliminado schedule {schedule_id} con {affected_assignments} asignaciones (usuarios: {len(affected_users)})')
+        
+        return jsonify({
+            'success': True,
+            'msg': f'Horario eliminado con {affected_assignments} asignaciones',
+            'affected_assignments': affected_assignments,
+            'affected_users_count': len(affected_users),
+            'affected_users_roles': [{'id': u.id, 'name': f'{u.nombre} {u.apellido}', 'role': u.role} for u in affected_users]
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'msg': f'Error al eliminar: {str(e)}'
+        }), 500
+
+
+@schedule_bp.route('/<int:schedule_id>/reassign', methods=['POST', 'OPTIONS'])
+@jwt_required()
+@admin_required
+def reassign_and_delete_schedule(schedule_id):
+    """Reasigna usuarios a otro horario y luego elimina (para todos los usuarios)"""
+    if request.method == 'OPTIONS':
+        return jsonify({'msg': 'OK'}), 200
     
-    # Si no tienen días en común, no chocan
-    if dias1.isdisjoint(dias2):
-        return False
+    data = request.get_json() or {}
     
-    # Helper para convertir a time
-    def _to_time(t):
-        if isinstance(t, str):
-            return datetime.strptime(t, "%H:%M").time()
-        return t
+    # Validar datos
+    if not data:
+        return jsonify(success=False, msg='Datos JSON requeridos'), 400
+        
+    new_schedule_id = data.get('new_schedule_id')
+    if not new_schedule_id:
+        return jsonify(success=False, msg='Se requiere nuevo horario (new_schedule_id)'), 400
+        
+    try:
+        schedule = Schedule.query.get(schedule_id)
+        if not schedule:
+            return jsonify(success=False, msg='Horario no encontrado'), 404
+            
+        new_schedule = Schedule.query.get(new_schedule_id)
+        if not new_schedule:
+            return jsonify(success=False, msg='Nuevo horario no encontrado'), 404
+            
+        # 1. Reasignar todos los usuarios (sin importar su rol)
+        assignments = UserSchedule.query.filter_by(schedule_id=schedule_id).all()
+        reassigned = 0
+        
+        for assignment in assignments:
+            assignment.schedule_id = new_schedule_id
+            reassigned += 1
+        
+        # 2. Eliminar el horario original
+        db.session.delete(schedule)
+        db.session.commit()
+        
+        admin = _get_user_from_identity(get_jwt_identity())
+        record_audit(
+            schedule_id=schedule_id,
+            admin_id=admin.id if admin else None,
+            change_type='reassign_delete',
+            details=f'Reasignados {reassigned} usuarios (todos los roles) a schedule {new_schedule_id} y eliminado schedule {schedule_id}'
+        )
+        
+        return jsonify({
+            'success': True,
+            'msg': f'Horario eliminado y {reassigned} usuarios reasignados',
+            'reassigned_count': reassigned,
+            'new_schedule_name': new_schedule.nombre
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'msg': f'Error en reasignación: {str(e)}'
+        }), 500
+
+
+@schedule_bp.route('/<int:schedule_id>/end-assignments', methods=['POST', 'OPTIONS'])
+@jwt_required()
+@admin_required
+def end_schedule_assignments(schedule_id):
+    """Termina todas las asignaciones del horario (cambia fecha fin a hoy) para todos los usuarios"""
+    if request.method == 'OPTIONS':
+        return jsonify({'msg': 'OK'}), 200
     
-    # Obtener horas
-    e1 = _to_time(h1.hora_entrada)
-    s1 = _to_time(h1.hora_salida)
-    e2 = _to_time(h2.hora_entrada)
-    s2 = _to_time(h2.hora_salida)
+    try:
+        schedule = Schedule.query.get(schedule_id)
+        if not schedule:
+            return jsonify(success=False, msg='Horario no encontrado'), 404
+            
+        # Cambiar fecha fin de todas las asignaciones activas a hoy
+        today = date.today()
+        assignments = UserSchedule.query.filter(
+            UserSchedule.schedule_id == schedule_id,
+            (UserSchedule.end_date == None) | (UserSchedule.end_date >= today)
+        ).all()
+        
+        ended_count = 0
+        for assignment in assignments:
+            assignment.end_date = today
+            ended_count += 1
+        
+        db.session.commit()
+        
+        admin = _get_user_from_identity(get_jwt_identity())
+        record_audit(
+            schedule_id=schedule_id,
+            admin_id=admin.id if admin else None,
+            change_type='end_assignments',
+            details=f'Terminadas {ended_count} asignaciones del schedule {schedule_id} (todos los roles)'
+        )
+        
+        return jsonify({
+            'success': True,
+            'msg': f'Terminadas {ended_count} asignaciones',
+            'ended_count': ended_count,
+            'schedule_name': schedule.nombre
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'msg': f'Error terminando asignaciones: {str(e)}'
+        }), 500
+
+
+@schedule_bp.route('/<int:schedule_id>/assignments', methods=['GET', 'OPTIONS'])
+@jwt_required()
+@admin_required
+def get_schedule_assignments(schedule_id):
+    """Obtiene todas las asignaciones de un horario (para todos los usuarios)"""
+    if request.method == 'OPTIONS':
+        return jsonify({'msg': 'OK'}), 200
     
-    return not (s1 <= e2 or s2 <= e1)
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(success=False, msg='Horario no encontrado'), 404
+        
+    assignments = UserSchedule.query.filter_by(schedule_id=schedule_id).all()
+    result = []
+    
+    for assignment in assignments:
+        user = assignment.user
+        result.append({
+            'user_id': user.id,
+            'user_name': f'{user.nombre} {user.apellido}',
+            'username': user.username,
+            'role': user.role,  # Incluir rol del usuario
+            'start_date': assignment.start_date.isoformat() if assignment.start_date else None,
+            'end_date': assignment.end_date.isoformat() if assignment.end_date else None,
+            'is_active': assignment.end_date is None or assignment.end_date >= date.today()
+        })
+    
+    return jsonify({
+        'success': True,
+        'schedule_id': schedule_id,
+        'schedule_name': schedule.nombre,
+        'assignments': result,
+        'total_count': len(result),
+        'active_count': len([a for a in result if a['is_active']]),
+        'roles_breakdown': {
+            'admin': len([a for a in result if a['role'] == 'admin']),
+            'empleado': len([a for a in result if a['role'] == 'empleado']),
+            'otros': len([a for a in result if a['role'] not in ['admin', 'empleado']])
+        }
+    }), 200
+
+
+@schedule_bp.route('/audit', methods=['GET'])
+@jwt_required()
+@admin_required
+def schedule_audit():
+    audits = ScheduleAudit.query.order_by(ScheduleAudit.timestamp.desc()).all()
+    result = []
+    for a in audits:
+        result.append({
+            'id': a.id,
+            'schedule_id': a.schedule_id,
+            'user_id': a.user_id,
+            'admin_id': a.admin_id,
+            'timestamp': a.timestamp.isoformat(),
+            'change_type': a.change_type,
+            'details': a.details
+        })
+    return jsonify(result), 200
+
+
+@schedule_bp.route('/', methods=['GET'])
+@jwt_required()
+@admin_required
+def list_schedules():
+    schedules = Schedule.query.order_by(Schedule.nombre).all()
+    result = []
+    for s in schedules:
+        # Contar asignaciones activas
+        active_assignments = UserSchedule.query.filter(
+            UserSchedule.schedule_id == s.id,
+            (UserSchedule.end_date == None) | (UserSchedule.end_date >= date.today())
+        ).count()
+        
+        result.append({
+            'id': s.id,
+            'nombre': s.nombre,
+            'hora_entrada': s.hora_entrada.strftime('%H:%M'),
+            'tolerancia_entrada': s.tolerancia_entrada,
+            'hora_salida': s.hora_salida.strftime('%H:%M'),
+            'tolerancia_salida': s.tolerancia_salida,
+            'dias': s.dias,
+            'tipo': s.tipo,
+            'active_assignments': active_assignments,
+            'total_assignments': UserSchedule.query.filter_by(schedule_id=s.id).count()
+        })
+    return jsonify(result), 200
+
+
+@schedule_bp.route('/my', methods=['GET'])
+@jwt_required()
+def get_my_schedule():
+    """
+    Obtiene los horarios del usuario autenticado.
+    Funciona para usuarios de CUALQUIER ROL.
+    """
+    identity = get_jwt_identity()
+    user = _get_user_from_identity(identity)
+
+    if not user:
+        return jsonify(msg="Usuario no encontrado"), 404
+
+    user_schedules = UserSchedule.query.filter_by(user_id=user.id).all()
+
+    result = []
+    for us in user_schedules:
+        s = us.schedule
+        result.append({
+            "schedule_id": s.id,
+            "nombre": s.nombre,
+            "hora_entrada": s.hora_entrada.strftime('%H:%M'),
+            "tolerancia_entrada": s.tolerancia_entrada,
+            "hora_salida": s.hora_salida.strftime('%H:%M'),
+            "tolerancia_salida": s.tolerancia_salida,
+            "dias": s.dias,
+            "tipo": s.tipo,
+            "start_date": us.start_date.isoformat() if us.start_date else None,
+            "end_date": us.end_date.isoformat() if us.end_date else None,
+            "is_active": us.end_date is None or us.end_date >= date.today()
+        })
+
+    return jsonify({
+        'success': True,
+        'user_id': user.id,
+        'user_role': user.role,
+        'schedules': result,
+        'current_schedule': next((s for s in result if s['is_active']), None)
+    }), 200
+
+
+@schedule_bp.route('/<int:schedule_id>', methods=['DELETE'])
+@jwt_required()
+@admin_required
+def delete_schedule(schedule_id):
+    """
+    Elimina un horario.
+    La verificación de asignaciones activas aplica para usuarios de todos los roles.
+    """
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+    
+    # Verificar si hay asignaciones activas (de cualquier usuario, cualquier rol)
+    active_us = UserSchedule.query.filter(
+        UserSchedule.schedule_id == schedule_id,
+        (UserSchedule.end_date == None) | (UserSchedule.end_date >= date.today())
+    ).first()
+
+    # Si hay asignaciones activas y NO se solicita fuerza, devolver error
+    force = request.args.get('force', 'false').lower() == 'true'
+    
+    if active_us and not force:
+        # Obtener información sobre las asignaciones activas
+        active_assignments = UserSchedule.query.filter(
+            UserSchedule.schedule_id == schedule_id,
+            (UserSchedule.end_date == None) | (UserSchedule.end_date >= date.today())
+        ).all()
+        
+        active_users = []
+        for assignment in active_assignments:
+            user = assignment.user
+            active_users.append({
+                'id': user.id,
+                'name': f'{user.nombre} {user.apellido}',
+                'role': user.role
+            })
+        
+        return jsonify({
+            'msg': 'No se puede eliminar: existen asignaciones activas',
+            'active_assignments_count': len(active_assignments),
+            'active_users': active_users,
+            'suggestion': 'Use ?force=true para eliminar forzosamente o /force endpoint'
+        }), 400
+
+    # Si hay asignaciones y se fuerza, eliminarlas primero
+    if active_us and force:
+        UserSchedule.query.filter_by(schedule_id=schedule_id).delete()
+
+    # Eliminar el horario
+    db.session.delete(schedule)
+    db.session.commit()
+
+    admin = _get_user_from_identity(get_jwt_identity())
+    change_type = 'force_delete' if force else 'delete'
+    record_audit(schedule_id=schedule_id, admin_id=admin.id if admin else None,
+                 change_type=change_type, details=f'Eliminado schedule {schedule_id}')
+    
+    return jsonify(msg='Horario eliminado'), 200
