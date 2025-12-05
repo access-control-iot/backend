@@ -837,9 +837,7 @@ def update_user_complete(user_id):
         user.set_password(data["password"])
         print(f"Contraseña actualizada para usuario {user_id}")
     
-    # 6. Actualizar rol si se proporciona
-   # 6. Actualizar rol si se proporciona
-if "role" in data:
+  if "role" in data:
     role_name = data["role"]
     role = Role.query.filter_by(name=role_name).first()
     if not role:
