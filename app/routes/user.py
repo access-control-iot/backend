@@ -858,16 +858,6 @@ def update_user_complete(user_id):
                 "msg": f"Rol inválido: {role_name}"
             }), 400
         
-        # Validar que no se cambie el rol del último administrador
-        # Solo validar si el usuario actual es admin y se quiere cambiar a no-admin
-        if user.is_admin and role.name != "admin":
-            # Contar administradores activos
-            admins = User_iot.query.filter_by(is_admin=True, is_active=True).count()
-            if admins <= 1:
-                return jsonify({
-                    "success": False,
-                    "msg": "No se puede cambiar el rol del último administrador activo"
-                }), 400
         
         # Actualizar el rol del usuario
         user.role = role
