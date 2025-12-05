@@ -8,7 +8,7 @@ auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
 
 
-@bp.route('/register', methods=['POST'])
+@auth_bp.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
     username = data.get('username')
@@ -26,7 +26,7 @@ def register():
     return jsonify({"msg": "User created successfully"}), 201
 
 
-@bp.route('/login', methods=['POST'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
     username = data.get('username')
@@ -79,7 +79,7 @@ def login():
 
 
 
-@bp.route('/protected', methods=['GET'])
+@auth_bp.route('/protected', methods=['GET'])
 @jwt_required()
 def protected():
     current_user = get_jwt_identity()
@@ -102,7 +102,7 @@ def protected():
 
 
 # Opcional: Endpoint para verificar estado de usuario
-@bp.route('/check-status', methods=['GET'])
+@auth_bp.route('/check-status', methods=['GET'])
 @jwt_required()
 def check_user_status():
     current_user = get_jwt_identity()
