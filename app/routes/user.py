@@ -409,7 +409,7 @@ def list_empleados():
 @jwt_required()
 @admin_required
 def list_all_users():
-    """Listar TODOS los usuarios (activos e inactivos)"""
+  
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     
@@ -757,6 +757,8 @@ def update_user_complete(user_id):
     user = User_iot.query.get_or_404(user_id)
     data = request.get_json() or {}
     
+    print(f"Actualizando usuario {user_id} con datos:", data)
+    
     # 1. Actualizar datos personales básicos
     if "nombre" in data:
         user.nombre = data["nombre"]
@@ -771,70 +773,125 @@ def update_user_complete(user_id):
     if "area_trabajo" in data:
         user.area_trabajo = data["area_trabajo"]
     
-    # 2. Actualizar RFID con validación
+    # 2. Actualizar username
+    if "username" in data:
+        new_username = data["username"]
+        # Verificar si el username ya existe para otro usuario
+        existing = User_iot.query.filter_by(username=new_username).first()
+        if existing and existing.id != user_id:
+            return jsonify({
+                "success": False,
+                "msg": f"El username '{new_username}' ya está en uso por otro usuario"
+            }), 400
+        user.username = new_username
+    
+    # 3. Actualizar RFID con validación
     if "rfid" in data:
         new_rfid = data["rfid"]
         if new_rfid:  # Si se quiere asignar un nuevo RFID
-            existing = User_iot.query.filter_by(rfid=new_rfid).first()
-            if existing and existing.id != user_id:
-                return jsonify(msg="Este RFID ya pertenece a otro usuario"), 400
-            user.rfid = new_rfid
+            # Si es None, vacío o "null", no hacer nada
+            if new_rfid != "null" and new_rfid != "":
+                existing = User_iot.query.filter_by(rfid=new_rfid).first()
+                if existing and existing.id != user_id:
+                    return jsonify({
+                        "success": False,
+                        "msg": "Este RFID ya pertenece a otro usuario"
+                    }), 400
+                user.rfid = new_rfid
         else:  # Si se quiere eliminar el RFID
             user.rfid = None
     
-    # 3. Actualizar huella con validación
+    # 4. Actualizar huella con validación
     if "huella_id" in data:
         new_huella_id = data["huella_id"]
-        if new_huella_id is not None:
+        if new_huella_id is not None and new_huella_id != "" and new_huella_id != "null":
             try:
                 new_huella_id = int(new_huella_id)
-                # Verificar si ya está asignada a otro usuario
-                existing = User_iot.query.filter_by(huella_id=new_huella_id).first()
-                if existing and existing.id != user_id:
-                    return jsonify(msg="Esta huella ya está asignada a otro usuario"), 400
-                
-                # Verificar si existe el registro de huella
-                huella_record = Huella.query.get(new_huella_id)
-                if not huella_record:
-                    # Crear registro de huella vacío si no existe
-                    huella_record = Huella(id=new_huella_id, template=b"")
-                    db.session.add(huella_record)
-                
-                user.huella_id = new_huella_id
+                if new_huella_id > 0:
+                    # Verificar si ya está asignada a otro usuario
+                    existing = User_iot.query.filter_by(huella_id=new_huella_id).first()
+                    if existing and existing.id != user_id:
+                        return jsonify({
+                            "success": False,
+                            "msg": "Esta huella ya está asignada a otro usuario"
+                        }), 400
+                    
+                    # Verificar si existe el registro de huella
+                    huella_record = Huella.query.get(new_huella_id)
+                    if not huella_record:
+                        # Crear registro de huella vacío si no existe
+                        huella_record = Huella(id=new_huella_id, template=b"")
+                        db.session.add(huella_record)
+                        print(f"Creado registro de huella vacío: {new_huella_id}")
+                    
+                    user.huella_id = new_huella_id
+                    print(f"Asignada huella {new_huella_id} a usuario {user_id}")
             except ValueError:
-                return jsonify(msg="huella_id debe ser un número entero"), 400
+                # Si no es un número válido, eliminar asignación
+                user.huella_id = None
         else:  # Eliminar asignación de huella
             user.huella_id = None
     
-    # 4. Actualizar contraseña si se proporciona
+    # 5. Actualizar contraseña si se proporciona
     if "password" in data and data["password"]:
         user.set_password(data["password"])
+        print(f"Contraseña actualizada para usuario {user_id}")
     
-    # 5. Actualizar rol si se proporciona
+    # 6. Actualizar rol si se proporciona
     if "role" in data:
         role_name = data["role"]
         role = Role.query.filter_by(name=role_name).first()
         if not role:
-            return jsonify(msg=f"Rol inválido: {role_name}"), 400
+            return jsonify({
+                "success": False,
+                "msg": f"Rol inválido: {role_name}"
+            }), 400
         
         # Validar que no se suspenda al último administrador
         if user.is_admin and role_name != "admin":
             admins = User_iot.query.filter_by(is_admin=True, is_active=True).count()
             if admins <= 1:
-                return jsonify(msg="No se puede cambiar el rol del último administrador activo"), 400
+                return jsonify({
+                    "success": False,
+                    "msg": "No se puede cambiar el rol del último administrador activo"
+                }), 400
         
         user.role = role
+        print(f"Rol actualizado a {role_name} para usuario {user_id}")
     
     try:
         db.session.commit()
+        print(f"Usuario {user_id} actualizado exitosamente")
+        
+        # Obtener datos actualizados para respuesta
+        user_actualizado = User_iot.query.get(user_id)
+        
         return jsonify({
             "success": True,
             "message": "Usuario actualizado completamente",
-            "user": user.as_dict()
+            "user": {
+                "id": user_actualizado.id,
+                "username": user_actualizado.username,
+                "nombre": user_actualizado.nombre,
+                "apellido": user_actualizado.apellido,
+                "genero": user_actualizado.genero,
+                "fecha_nacimiento": user_actualizado.fecha_nacimiento.isoformat() if user_actualizado.fecha_nacimiento else None,
+                "fecha_contrato": user_actualizado.fecha_contrato.isoformat() if user_actualizado.fecha_contrato else None,
+                "area_trabajo": user_actualizado.area_trabajo,
+                "huella_id": user_actualizado.huella_id,
+                "rfid": user_actualizado.rfid,
+                "role": user_actualizado.role.name if user_actualizado.role else None,
+                "is_active": user_actualizado.is_active
+            }
         }), 200
+        
     except Exception as e:
         db.session.rollback()
-        return jsonify(msg=f"Error al actualizar usuario: {str(e)}"), 500
+        print(f"Error al actualizar usuario: {str(e)}")
+        return jsonify({
+            "success": False,
+            "msg": f"Error al actualizar usuario: {str(e)}"
+        }), 500
 
 @user_bp.route("/<int:user_id>/remove-huella", methods=["PUT"])
 @jwt_required()
