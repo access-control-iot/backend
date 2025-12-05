@@ -861,7 +861,7 @@ def update_user_complete(user_id):
         
         # Actualizar el rol del usuario
         user.role = role
-        user.is_admin = (role.name == "admin")  # Asegurar que is_admin esté sincronizado
+
         
         print(f"Rol actualizado a {role.name} para usuario {user_id}")
     
