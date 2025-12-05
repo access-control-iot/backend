@@ -38,7 +38,8 @@ def login():
         return jsonify({"msg": "Usuario no encontrado"}), 401
 
     # VERIFICAR SI EL USUARIO ESTÁ ACTIVO
-    if not user.isActive:
+    if not user.is_active
+:
         return jsonify({
             "msg": "Usuario inactivo - No puede iniciar sesión",
             "detail": "Contacte al administrador para reactivar su cuenta"
@@ -52,7 +53,7 @@ def login():
             additional_claims={
                 "username": user.username,
                 "role": role_name,
-                "isActive": user.isActive  # Incluir estado en el token
+                "isActive": user.is_active # Incluir estado en el token
             }
         )
 
@@ -63,7 +64,7 @@ def login():
             "nombre": user.nombre, 
             "apellido": user.apellido,
             "area_trabajo": user.area_trabajo,
-            "isActive": user.isActive,
+            "isActive": user.is_active,
             "hasFingerprint": bool(user.huella_id),  # Si tiene huella registrada
             "hasRFID": bool(user.rfid)  # Si tiene RFID registrado
         }
@@ -92,7 +93,7 @@ def protected():
         return jsonify({"msg": "Usuario no encontrado"}), 404
     
     # Verificar si sigue activo (por si cambió después de login)
-    if not user.isActive:
+    if not user.is_active:
         return jsonify({
             "msg": "Acceso denegado - Usuario inactivo",
             "detail": "Su cuenta ha sido desactivada"
@@ -124,5 +125,6 @@ def check_user_status():
         "apellido": user.apellido,
         "hasFingerprint": bool(user.huella_id),
         "hasRFID": bool(user.rfid),
-        "canLogin": user.isActive
+        "canLogin": user.is_active
+
     }), 200
