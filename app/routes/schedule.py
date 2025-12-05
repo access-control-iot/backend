@@ -336,7 +336,69 @@ def reassign_and_delete_schedule(schedule_id):
     )
     
     return jsonify(msg=f'Horario eliminado y {reassigned} usuarios reasignados'), 200
+@schedule_bp.route('/<int:schedule_id>/end-assignments', methods=['POST'])
+@jwt_required()
+@admin_required
+def end_schedule_assignments(schedule_id):
+    """Termina todas las asignaciones del horario (cambia fecha fin a hoy)"""
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+        
+    # Cambiar fecha fin de todas las asignaciones activas a hoy
+    today = date.today()
+    assignments = UserSchedule.query.filter(
+        UserSchedule.schedule_id == schedule_id,
+        (UserSchedule.end_date == None) | (UserSchedule.end_date >= today)
+    ).all()
+    
+    ended_count = 0
+    for assignment in assignments:
+        assignment.end_date = today
+        ended_count += 1
+    
+    db.session.commit()
+    
+    admin = _get_user_from_identity(get_jwt_identity())
+    record_audit(
+        schedule_id=schedule_id,
+        admin_id=admin.id if admin else None,
+        change_type='end_assignments',
+        details=f'Terminadas {ended_count} asignaciones del schedule {schedule_id}'
+    )
+    
+    return jsonify(msg=f'Terminadas {ended_count} asignaciones'), 200
 
+
+@schedule_bp.route('/<int:schedule_id>/assignments', methods=['GET'])
+@jwt_required()
+@admin_required
+def get_schedule_assignments(schedule_id):
+    """Obtiene todas las asignaciones de un horario"""
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+        
+    assignments = UserSchedule.query.filter_by(schedule_id=schedule_id).all()
+    result = []
+    
+    for assignment in assignments:
+        user = assignment.user
+        result.append({
+            'user_id': user.id,
+            'user_name': f'{user.nombre} {user.apellido}',
+            'username': user.username,
+            'start_date': assignment.start_date.isoformat() if assignment.start_date else None,
+            'end_date': assignment.end_date.isoformat() if assignment.end_date else None,
+            'is_active': assignment.end_date is None or assignment.end_date >= date.today()
+        })
+    
+    return jsonify({
+        'schedule_id': schedule_id,
+        'schedule_name': schedule.nombre,
+        'assignments': result,
+        'active_count': len([a for a in result if a['is_active']])
+    }), 200
 @schedule_bp.route('/audit', methods=['GET'])
 @jwt_required()
 @admin_required
