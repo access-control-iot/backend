@@ -214,34 +214,17 @@ def proxy_command_to_esp32():
         return jsonify({"success": False, "message": "IP del ESP32 requerida"}), 400
     
     try:
-        # URL CORRECTA para registro de huella
-        esp32_url = f"http://{esp32_ip}"
-        
         # Enviar comando al ESP32
-        if command == "REGISTER_FINGERPRINT":
-            # Usar endpoint de registro de huella
-            response = requests.post(
-                f"{esp32_url}/command",  # O usar /update-fingerprint si existe
-                json={
-                    "command": command,
-                    "huella_id": huella_id,
-                    "user_id": user_id,
-                    "timestamp": datetime.now().isoformat()
-                },
-                timeout=30  # Aumentar timeout para registro de huella
-            )
-        else:
-            # Para otros comandos
-            response = requests.post(
-                f"{esp32_url}/command",
-                json={
-                    "command": command,
-                    "huella_id": huella_id,
-                    "user_id": user_id,
-                    "timestamp": datetime.now().isoformat()
-                },
-                timeout=10
-            )
+        response = requests.post(
+            f"http://{esp32_ip}/command",
+            json={
+                "command": command,
+                "huella_id": huella_id,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            },
+            timeout=10
+        )
         
         return jsonify({
             "success": True,
@@ -249,12 +232,6 @@ def proxy_command_to_esp32():
             "message": f"Comando enviado a ESP32 ({esp32_ip})",
             "esp32_response": response.json() if response.content else None
         }), 200
-        
-    except requests.exceptions.Timeout:
-        return jsonify({
-            "success": False,
-            "message": f"Timeout conectando al ESP32 {esp32_ip}"
-        }), 504
         
     except Exception as e:
         return jsonify({
