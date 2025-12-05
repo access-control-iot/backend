@@ -48,7 +48,6 @@ def parse_date_str(d_str):
 
 
 def validate_days(dias):
-    
     valid = {'Lun','Mar','Mie','Jue','Vie','Sab','Dom'}
     if dias is None:
         raise ValueError("dias es requerido")
@@ -159,7 +158,6 @@ def assign_schedule():
     ).all()
 
     def _to_time(t):
-      
         if isinstance(t, str):
             return datetime.strptime(t, "%H:%M").time()
         return t
@@ -175,7 +173,6 @@ def assign_schedule():
         e2 = _to_time(h2.hora_entrada)
         s2 = _to_time(h2.hora_salida)
 
-   
         return not (s1 <= e2 or s2 <= e1)
 
     for us in existing_schedules:
@@ -198,12 +195,14 @@ def assign_schedule():
 
     return jsonify(msg='Horario asignado'), 201
 
+
 @schedule_bp.route('/<int:schedule_id>', methods=['GET'])
 @jwt_required()
 @admin_required
 def get_schedule(schedule_id):
-  
-    schedule = Schedule.query.get_or_404(schedule_id)
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
     
     return jsonify({
         'id': schedule.id,
@@ -215,11 +214,16 @@ def get_schedule(schedule_id):
         'dias': schedule.dias,
         'tipo': schedule.tipo
     }), 200
+
+
 @schedule_bp.route('/<int:schedule_id>', methods=['PUT'])
 @jwt_required()
 @admin_required
 def update_schedule(schedule_id):
-    schedule = Schedule.query.get_or_404(schedule_id)
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+        
     data = request.get_json() or {}
     cambios = []
 
@@ -273,7 +277,11 @@ def update_schedule(schedule_id):
 @jwt_required()
 @admin_required
 def delete_schedule(schedule_id):
-    schedule = Schedule.query.get_or_404(schedule_id)
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+        
+    # Verificar si hay asignaciones activas
     active_us = UserSchedule.query.filter(
         UserSchedule.schedule_id == schedule_id,
         (UserSchedule.end_date == None) | (UserSchedule.end_date >= date.today())
@@ -329,6 +337,7 @@ def list_schedules():
         })
     return jsonify(result), 200
 
+
 @schedule_bp.route('/my', methods=['GET'])
 @jwt_required()
 def get_my_schedule():
@@ -357,4 +366,3 @@ def get_my_schedule():
         })
 
     return jsonify(result), 200
-
