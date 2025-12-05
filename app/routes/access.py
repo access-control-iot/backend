@@ -674,8 +674,13 @@ def decidir_accion_automatica(user, timestamp):
     
     # Obtener horario activo
     schedule = get_user_schedule(user.id, timestamp)
-    
-    # Si es admin o sin horario, solo acceso
+     if not user.isActive:
+        return {
+            'tipo': 'ACCESO_DENEGADO',
+            'registrar_asistencia': False,
+            'razon': 'Usuario inactivo',
+            'denegar_acceso': True
+        }
     if user.role.name == "admin":
         return {
             'tipo': 'ACCESO',
@@ -839,17 +844,23 @@ def auto_access():
     huella_id = data.get('huella_id')
     rfid = data.get('rfid')
     
-   
     es_zona_segura = (huella_id is not None and rfid is not None)
     
     if es_zona_segura:
-        
         user = User_iot.query.filter_by(huella_id=huella_id).first()
         
         if not user or user.role.name != "admin":
             return jsonify({
                 "success": False,
                 "reason": "Acceso denegado - Zona solo para administradores",
+                "tipo": "ZONA_SEGURA_DENEGADA"
+            }), 403
+        
+        # VERIFICAR SI EL USUARIO ESTÁ ACTIVO
+        if not user.isActive:
+            return jsonify({
+                "success": False,
+                "reason": "Acceso denegado - Usuario inactivo",
                 "tipo": "ZONA_SEGURA_DENEGADA"
             }), 403
         
@@ -882,7 +893,6 @@ def auto_access():
             "registrar_asistencia": False
         }), 200
     
-   
     if huella_id:
         user = User_iot.query.filter_by(huella_id=huella_id).first()
         sensor_type = 'Huella'
@@ -908,10 +918,26 @@ def auto_access():
             "tipo": "ACCESO_DENEGADO"
         }), 403
     
+    # VERIFICAR SI EL USUARIO ESTÁ ACTIVO
+    if not user.isActive:
+        failed_count = _record_failed_attempt(
+            identifier=identifier,
+            identifier_type='huella' if huella_id else 'rfid',
+            user_id=user.id,
+            reason='Usuario inactivo'
+        )
+        return jsonify({
+            "success": False,
+            "reason": "Acceso denegado - Usuario inactivo",
+            "trigger_buzzer": (failed_count >= 3),
+            "failed_count": failed_count,
+            "tipo": "ACCESO_DENEGADO"
+        }), 403
+    
     timestamp = datetime.utcnow()
     lima_timestamp = timestamp.astimezone(LIMA_TZ)
     
-    
+    # Resto del código existente...
     last_access = AccessLog.query.filter(
         AccessLog.user_id == user.id,
         AccessLog.status == 'Permitido',
@@ -921,7 +947,6 @@ def auto_access():
     if not last_access:
         access_action = 'ENTRADA'
     else:
-        
         if last_access.action_type:
             if 'ENTRADA' in last_access.action_type:
                 access_action = 'SALIDA'
@@ -932,10 +957,8 @@ def auto_access():
         else:
             access_action = 'SALIDA' if last_access.action_type == 'ENTRADA' else 'ENTRADA'
     
-    
     decision = decidir_accion_automatica(user, lima_timestamp)
     
- 
     hoy = lima_timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
     mañana = hoy + timedelta(days=1)
     
@@ -946,30 +969,22 @@ def auto_access():
         Attendance.exit_time.is_(None)
     ).first()
     
-   
     if decision['registrar_asistencia']:
-      
         if decision.get('accion_asistencia') == 'salida' and not asistencia_abierta:
-           
             decision['registrar_asistencia'] = False
             decision['tipo'] = 'ACCESO'
             decision['razon'] = 'No tiene entrada registrada para marcar salida'
         elif decision.get('accion_asistencia') == 'entrada' and asistencia_abierta:
-            
             decision['registrar_asistencia'] = False
             decision['tipo'] = 'ACCESO'
             decision['razon'] = 'Ya tiene asistencia abierta hoy'
     else:
-        
         if access_action == 'SALIDA' and asistencia_abierta:
-            
             decision['registrar_asistencia'] = True
             decision['tipo'] = 'ACCESO_Y_ASISTENCIA'
             decision['razon'] = 'Cierre de jornada laboral'
             decision['accion_asistencia'] = 'salida'
-            print(f"DEBUG: Forzando cierre de jornada para usuario {user.id}")
     
- 
     log = AccessLog(
         user_id=user.id,
         timestamp=timestamp,
@@ -982,16 +997,11 @@ def auto_access():
     )
     db.session.add(log)
     
-   
     attendance_data = None
     if decision['registrar_asistencia']:
-        print(f"DEBUG: Registrando asistencia para usuario {user.id}, acción: {decision.get('accion_asistencia', 'entry')}")
         attendance_data = register_attendance_from_access(log)
-        if attendance_data:
-            print(f"DEBUG: Resultado asistencia: {attendance_data}")
     
     db.session.commit()
-    
     
     response = {
         "success": True,
@@ -1009,7 +1019,6 @@ def auto_access():
         "asistencia_abierta": bool(asistencia_abierta)
     }
     
-    
     schedule = get_user_schedule(user.id, lima_timestamp)
     if schedule:
         response.update({
@@ -1020,7 +1029,6 @@ def auto_access():
             "tolerancia_salida": schedule.tolerancia_salida
         })
     
-
     if attendance_data and attendance_data.get('ok'):
         response['asistencia_registrada'] = True
         response['asistencia_action'] = attendance_data.get('action')
@@ -1032,8 +1040,8 @@ def auto_access():
             response['estado_entrada'] = 'salida_registrada'
             response['duracion_jornada'] = attendance_data.get('duracion_jornada')
     
-    print(f"DEBUG: Respuesta final: {response}")
     return jsonify(response), 200
+        
 @bp.route('/secure-zone/double-auth', methods=['POST'])
 def secure_zone_double_auth():
     """
