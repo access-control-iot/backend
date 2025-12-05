@@ -1,127 +1,215 @@
+# app/routes/auth.py
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from app.models import User_iot
-from app.services.jwt_service import generate_token, decode_token
-from app.utils.helpers import validate_user_credentials
+from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity
+from werkzeug.security import check_password_hash
+from datetime import timedelta
+import logging
+
 from app import db
-bp = Blueprint('auth', __name__, url_prefix='/auth')
+from app.models import User_iot, UserRoleEnum
 
+auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
-@bp.route('/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    if User_iot.query.filter_by(username=username).first():
-        return jsonify({"msg": "User already exists"}), 400
-
-    new_user = User_iot(username=username)
-    new_user.set_password(password)  
-
-    db.session.add(new_user)
-    db.session.commit()
-
-    return jsonify({"msg": "User created successfully"}), 201
-
-
-@bp.route('/login', methods=['POST'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-
-    user = User_iot.query.filter_by(username=username).first()
-
-    if not user:
-        return jsonify({"msg": "Usuario no encontrado"}), 401
-
-    # VERIFICAR SI EL USUARIO ESTÁ ACTIVO
-    if not user.isActive:
-        return jsonify({
-            "msg": "Usuario inactivo - No puede iniciar sesión",
-            "detail": "Contacte al administrador para reactivar su cuenta"
-        }), 403
-
-    if validate_user_credentials(user, password):
-        role_name = user.role.name if user.role else "empleado"
-
-        access_token = create_access_token(
-            identity=str(user.id),  
-            additional_claims={
-                "username": user.username,
-                "role": role_name,
-                "isActive": user.isActive  # Incluir estado en el token
-            }
-        )
-
-        user_data = {
-            "id": user.id,
-            "username": user.username,
-            "role": role_name,
-            "nombre": user.nombre, 
-            "apellido": user.apellido,
-            "area_trabajo": user.area_trabajo,
-            "isActive": user.isActive,
-            "hasFingerprint": bool(user.huella_id),  # Si tiene huella registrada
-            "hasRFID": bool(user.rfid)  # Si tiene RFID registrado
+    """Endpoint de autenticación de usuarios"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'msg': 'No se proporcionaron datos'}), 400
+        
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({'msg': 'Se requiere nombre de usuario y contraseña'}), 400
+        
+        logger.info(f"Intento de login para usuario: {username}")
+        
+        # Buscar usuario por username
+        user = User_iot.query.filter_by(username=username).first()
+        
+        if not user:
+            logger.warning(f"Usuario no encontrado: {username}")
+            return jsonify({'msg': 'Usuario o contraseña incorrectos'}), 401
+        
+        # Verificar si el usuario está activo - CORREGIDO: usar is_active
+        if not user.is_active:
+            logger.warning(f"Usuario inactivo: {username}")
+            return jsonify({'msg': 'Cuenta inactiva. Contacte al administrador.'}), 401
+        
+        # Verificar contraseña
+        if not check_password_hash(user.password_hash, password):
+            logger.warning(f"Contraseña incorrecta para usuario: {username}")
+            return jsonify({'msg': 'Usuario o contraseña incorrectos'}), 401
+        
+        # Crear claims para el token JWT
+        additional_claims = {
+            'id': user.id,
+            'role': user.role.name if user.role else 'empleado',  # Usar role.name
+            'nombre': user.nombre,
+            'apellido': user.apellido,
+            'username': user.username
         }
-
+        
+        # Crear tokens de acceso y refresh
+        access_token = create_access_token(
+            identity=user.id,
+            additional_claims=additional_claims,
+            expires_delta=timedelta(hours=24)
+        )
+        
+        refresh_token = create_refresh_token(
+            identity=user.id,
+            additional_claims=additional_claims
+        )
+        
+        logger.info(f"Login exitoso para usuario: {username} (rol: {additional_claims['role']})")
+        
         return jsonify({
-            "access_token": access_token,
-            "user": user_data,
-            "msg": "Login exitoso"
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'nombre': user.nombre,
+                'apellido': user.apellido,
+                'role': user.role.name if user.role else 'empleado',
+                'is_active': user.is_active,
+                'area_trabajo': user.area_trabajo,
+                'genero': user.genero,
+                'rfid': user.rfid,
+                'huella_id': user.huella_id
+            }
         }), 200
+        
+    except Exception as e:
+        logger.error(f"Error en login: {str(e)}", exc_info=True)
+        return jsonify({'msg': 'Error interno del servidor'}), 500
 
-    return jsonify({"msg": "Bad username or password"}), 401
 
-
-
-
-@bp.route('/protected', methods=['GET'])
-@jwt_required()
-def protected():
-    current_user = get_jwt_identity()
-    
-    # Obtener el usuario actual desde la base de datos
-    user_id = current_user if isinstance(current_user, str) else current_user.get('id')
-    user = User_iot.query.get(user_id)
-    
-    if not user:
-        return jsonify({"msg": "Usuario no encontrado"}), 404
-    
-    # Verificar si sigue activo (por si cambió después de login)
-    if not user.isActive:
+@auth_bp.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    """Refrescar token de acceso"""
+    try:
+        current_user_id = get_jwt_identity()
+        user = User_iot.query.get(current_user_id)
+        
+        if not user or not user.is_active:
+            return jsonify({'msg': 'Usuario no encontrado o inactivo'}), 401
+        
+        # Crear nuevos claims
+        additional_claims = {
+            'id': user.id,
+            'role': user.role.name if user.role else 'empleado',
+            'nombre': user.nombre,
+            'apellido': user.apellido,
+            'username': user.username
+        }
+        
+        new_access_token = create_access_token(
+            identity=current_user_id,
+            additional_claims=additional_claims,
+            expires_delta=timedelta(hours=24)
+        )
+        
         return jsonify({
-            "msg": "Acceso denegado - Usuario inactivo",
-            "detail": "Su cuenta ha sido desactivada"
-        }), 403
-    
-    return jsonify(logged_in_as=current_user), 200
+            'access_token': new_access_token,
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'nombre': user.nombre,
+                'apellido': user.apellido,
+                'role': user.role.name if user.role else 'empleado',
+                'is_active': user.is_active
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error en refresh token: {str(e)}")
+        return jsonify({'msg': 'Error al refrescar token'}), 500
 
 
-# Opcional: Endpoint para verificar estado de usuario
-@bp.route('/check-status', methods=['GET'])
+@auth_bp.route('/me', methods=['GET'])
 @jwt_required()
-def check_user_status():
-    current_user = get_jwt_identity()
-    
-    if isinstance(current_user, dict):
-        user_id = current_user.get('id')
-    else:
-        user_id = current_user
-    
-    user = User_iot.query.get(user_id)
-    
-    if not user:
-        return jsonify({"msg": "Usuario no encontrado"}), 404
-    
-    return jsonify({
-        "isActive": user.isActive,
-        "username": user.username,
-        "nombre": user.nombre,
-        "apellido": user.apellido,
-        "hasFingerprint": bool(user.huella_id),
-        "hasRFID": bool(user.rfid),
-        "canLogin": user.isActive
-    }), 200
+def get_current_user():
+    """Obtener información del usuario actual"""
+    try:
+        current_user_id = get_jwt_identity()
+        user = User_iot.query.get(current_user_id)
+        
+        if not user:
+            return jsonify({'msg': 'Usuario no encontrado'}), 404
+        
+        return jsonify({
+            'id': user.id,
+            'username': user.username,
+            'nombre': user.nombre,
+            'apellido': user.apellido,
+            'role': user.role.name if user.role else 'empleado',
+            'is_active': user.is_active,
+            'area_trabajo': user.area_trabajo,
+            'genero': user.genero,
+            'fecha_nacimiento': user.fecha_nacimiento.isoformat() if user.fecha_nacimiento else None,
+            'fecha_contrato': user.fecha_contrato.isoformat() if user.fecha_contrato else None,
+            'rfid': user.rfid,
+            'huella_id': user.huella_id,
+            'created_at': user.created_at.isoformat() if user.created_at else None,
+            'updated_at': user.updated_at.isoformat() if user.updated_at else None
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo usuario actual: {str(e)}")
+        return jsonify({'msg': 'Error interno del servidor'}), 500
+
+
+@auth_bp.route('/change-password', methods=['POST'])
+@jwt_required()
+def change_password():
+    """Cambiar contraseña del usuario actual"""
+    try:
+        current_user_id = get_jwt_identity()
+        user = User_iot.query.get(current_user_id)
+        
+        if not user:
+            return jsonify({'msg': 'Usuario no encontrado'}), 404
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'msg': 'No se proporcionaron datos'}), 400
+        
+        current_password = data.get('current_password')
+        new_password = data.get('new_password')
+        
+        if not current_password or not new_password:
+            return jsonify({'msg': 'Se requiere contraseña actual y nueva contraseña'}), 400
+        
+        # Verificar contraseña actual
+        if not check_password_hash(user.password_hash, current_password):
+            return jsonify({'msg': 'Contraseña actual incorrecta'}), 401
+        
+        # Cambiar contraseña
+        user.set_password(new_password)
+        db.session.commit()
+        
+        logger.info(f"Contraseña cambiada para usuario: {user.username}")
+        
+        return jsonify({'msg': 'Contraseña cambiada exitosamente'}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error cambiando contraseña: {str(e)}")
+        return jsonify({'msg': 'Error interno del servidor'}), 500
+
+
+@auth_bp.route('/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    """Endpoint de logout (el cliente debe eliminar los tokens)"""
+    # En JWT, el logout se maneja del lado del cliente eliminando los tokens
+    return jsonify({'msg': 'Logout exitoso. Elimine los tokens del cliente.'}), 200
