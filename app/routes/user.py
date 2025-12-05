@@ -1008,7 +1008,7 @@ def bulk_activate_users():
     }), 200
 # En user.py, busca las funciones de huella y añade versiones públicas SIN @jwt_required()
 
-@users_bp.route('/huella/public/register', methods=['POST'])
+@user_bp.route('/huella/public/register', methods=['POST'])
 def public_register_fingerprint():
     """Endpoint público para que ESP32 confirme registro de huella"""
     try:
