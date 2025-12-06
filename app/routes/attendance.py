@@ -206,7 +206,133 @@ def register_attendance_entry(user, timestamp, schedule_status):
         "message": get_attendance_message(schedule_status, 'entry')
     }), 201
 
+@bp.route('/rfid-attendance', methods=['POST'])
+def rfid_attendance():
+    data = request.get_json() or {}
+    rfid = data.get('rfid')
 
+    if rfid is None:
+        return jsonify(success=False, reason='Falta RFID'), 400
+
+    # Buscar usuario por RFID
+    user = User_iot.query.filter_by(rfid=rfid).first()
+    
+    if not user:
+        return jsonify({
+            "success": False,
+            "reason": "RFID no registrado"
+        }), 403
+
+    try:
+        lima_now = datetime.now(LIMA_TZ)
+        
+        # Determinar la acción (entrada o salida)
+        action = determine_attendance_action(user.id, lima_now)
+        
+        # Obtener horario
+        schedule = get_user_schedule(user.id, lima_now)
+        
+        if action == 'exit':
+            # Verificar si ya existe una entrada para hoy
+            today_start = lima_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = today_start + timedelta(days=1)
+            
+            open_attendance = Attendance.query.filter(
+                Attendance.user_id == user.id,
+                Attendance.entry_time >= today_start,
+                Attendance.entry_time <= today_end,
+                Attendance.exit_time.is_(None)
+            ).first()
+            
+            if not open_attendance:
+                return jsonify({
+                    "success": False,
+                    "reason": "No tiene una entrada registrada para hoy"
+                }), 400
+            
+            # Verificar si es hora de salida
+            if schedule:
+                salida_dt = datetime.combine(lima_now.date(), schedule.hora_salida)
+                salida_dt = LIMA_TZ.localize(salida_dt)
+                
+                salida_permitida_desde = salida_dt - timedelta(minutes=1)
+                
+                if lima_now < salida_permitida_desde:
+                    minutos_restantes = int((salida_dt - lima_now).total_seconds() / 60)
+                    return jsonify({
+                        "success": False,
+                        "reason": f"No es hora de salida. Puede registrar salida a partir de las {salida_dt.strftime('%H:%M')} (faltan {minutos_restantes} minutos)"
+                    }), 400
+            
+            # Registrar salida
+            return register_attendance_exit(user, lima_now)
+        
+        elif action == 'entry_pending_exit':
+            # Tiene entrada abierta pero aún no es hora de salida
+            if schedule:
+                salida_dt = datetime.combine(lima_now.date(), schedule.hora_salida)
+                salida_dt = LIMA_TZ.localize(salida_dt)
+                minutos_restantes = int((salida_dt - lima_now).total_seconds() / 60)
+                
+                return jsonify({
+                    "success": False,
+                    "reason": f"Aún no es hora de salida. Puede registrar salida a partir de las {salida_dt.strftime('%H:%M')} (faltan {minutos_restantes} minutos)",
+                    "has_open_entry": True
+                }), 400
+            else:
+                return jsonify({
+                    "success": False,
+                    "reason": "Ya tiene una entrada registrada hoy",
+                    "has_open_entry": True
+                }), 400
+        else:
+            # Es una entrada nueva
+            if not schedule:
+                return jsonify({
+                    "success": False,
+                    "reason": "Usuario no tiene horario asignado"
+                }), 403
+            
+            schedule_status = check_schedule_status(schedule, lima_now)
+            
+            # Verificar si ya tiene entrada hoy
+            today_start = lima_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = today_start + timedelta(days=1)
+            
+            existing_entry = Attendance.query.filter(
+                Attendance.user_id == user.id,
+                Attendance.entry_time >= today_start,
+                Attendance.entry_time <= today_end
+            ).first()
+            
+            if existing_entry:
+                # Si ya tiene entrada, verificar si puede salir
+                if schedule:
+                    salida_dt = datetime.combine(lima_now.date(), schedule.hora_salida)
+                    salida_dt = LIMA_TZ.localize(salida_dt)
+                    salida_permitida_desde = salida_dt - timedelta(minutes=1)
+                    
+                    if lima_now >= salida_permitida_desde:
+                        # Es hora de salida, registrar salida
+                        return register_attendance_exit(user, lima_now)
+                    else:
+                        minutos_restantes = int((salida_dt - lima_now).total_seconds() / 60)
+                        return jsonify({
+                            "success": False,
+                            "reason": f"Ya tiene entrada registrada hoy. Puede marcar salida a partir de las {salida_dt.strftime('%H:%M')} (faltan {minutos_restantes} minutos)",
+                            "has_open_entry": True
+                        }), 400
+            
+            # Registrar entrada
+            return register_attendance_entry(user, lima_now, schedule_status)
+
+    except Exception as e:
+        print(f"Error en rfid-attendance: {e}")
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "reason": "Error interno del sistema"
+        }), 500
 def register_attendance_exit(user, timestamp):
    
     today_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
