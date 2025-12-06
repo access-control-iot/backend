@@ -32,7 +32,25 @@ def admin_required(fn):
         return fn(*args, **kwargs)
     return wrapper
 
-
+@schedule_bp.route('/<int:schedule_id>', methods=['GET'])
+@jwt_required()
+@admin_required
+def get_schedule(schedule_id):
+    """Obtiene un horario específico por su ID"""
+    schedule = Schedule.query.get(schedule_id)
+    if not schedule:
+        return jsonify(msg='Horario no encontrado'), 404
+    
+    return jsonify({
+        'id': schedule.id,
+        'nombre': schedule.nombre,
+        'hora_entrada': schedule.hora_entrada.strftime('%H:%M'),
+        'tolerancia_entrada': schedule.tolerancia_entrada,
+        'hora_salida': schedule.hora_salida.strftime('%H:%M'),
+        'tolerancia_salida': schedule.tolerancia_salida,
+        'dias': schedule.dias,
+        'tipo': schedule.tipo
+    }), 200
 def parse_time_str(t_str):
     if isinstance(t_str, (datetime,)):
         return t_str.time()
